@@ -1,0 +1,101 @@
+# sql-loop
+
+A text-to-SQL agent built twice: once the way most agent loops are written, and
+once with the loop engineered. Same model, same tools, same prompt, same
+schema. The only difference is the loop.
+
+Companion code for a talk on loop engineering.
+
+## Why text-to-SQL
+
+Because verification looks easy here and is not. A query that runs is not a
+query that is right, and every interesting failure in this schema, discounts
+ignored, cancelled orders counted, customers dropped by an inner join, parses,
+plans, and executes cleanly. That gap is the argument.
+
+Coding agents make the point too easily. `pytest` already exists, so the
+verifier question never comes up. Here you have to build it.
+
+## Setup
+
+```bash
+pip install -r requirements.txt
+export ANTHROPIC_API_KEY=sk-ant-...
+make seed
+```
+
+Optional, for traces and experiments:
+
+```bash
+export OPIK_API_KEY=...
+export OPIK_WORKSPACE=...
+```
+
+## Run
+
+```bash
+make smoke        # full loop test, no API key needed, ~5 seconds
+make naive        # the before corpus, 25 tasks
+make engineered   # the after corpus, 25 tasks
+make report       # the table and out/exit_reasons.png
+```
+
+`make smoke` replaces the model with a scripted stand-in and drives every exit
+reason. It needs no network and no key, so it works as a live demo when the
+venue wifi does not.
+
+## Map
+
+| file | what it is |
+|---|---|
+| `agent/loop.py` | the engineered loop. `run` is the slide |
+| `agent/naive.py` | the before loop. Two exit conditions, both weak |
+| `agent/gate.py` | budget, state, and `should_continue`, the only thing that ends a loop |
+| `agent/verify.py` | the five-rung verifier ladder |
+| `agent/classify.py` | the error taxonomy and what gets fed back |
+| `agent/db.py` | schema, seed, and a list of the traps with the rung that catches each |
+| `evals/questions.py` | 25 tasks with gold SQL and per-question invariants |
+| `evals/metrics.py` | rung 6 and the corpus metrics. Never imported by the loop |
+| `evals/report.py` | the before/after table and the chart |
+
+## The two ladders
+
+Runtime verification stops at rung 5. Comparing against a gold answer is rung 6
+and lives in `evals/`, because at runtime you do not have the answer. Keeping
+them in separate modules is not tidiness, it is the control plane and the
+measurement plane:
+
+```
+control plane      rungs 1-5, deterministic, decides whether the loop continues
+measurement plane  rung 6 and the LLM judge, offline, decides nothing
+```
+
+An LLM judge is a fine metric and a terrible gate. `evals/metrics.py` may not be
+imported from `agent/`, and is not.
+
+## Exit reasons
+
+```
+verified_success    a deterministic check passed
+budget_exhausted    iterations, tokens, wall clock, or dollars
+no_progress         same query fingerprint, or stuck at the same rung
+hard_blocker        nothing the agent can emit will work
+escalate            repeated malformed actions
+model_said_done     naive loop only, and the reason it is naive
+```
+
+Logging the exit reason on every trace is the single highest-signal change in
+this repo. Its distribution over a corpus tells you what kind of loop problem
+you have before you open a single trace.
+
+## Caveats
+
+- 25 hand-written questions against one schema is enough to show a difference
+  in behaviour. It is not a benchmark, and the absolute numbers should not be
+  read as a general claim about text-to-SQL.
+- Both loops run once per task. Agent runs vary between runs, so treat small
+  gaps as noise. Increase `trial_count` if you need tighter numbers.
+- Prices in `agent/llm.py` were checked in September 2026. Re-check them before
+  putting a cost figure on a slide.
+- The invariants are the interesting part and they are hand written. That is
+  the work, and there is no way around it.

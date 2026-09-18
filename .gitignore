@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+data/*.duckdb
+out/*.json
+out/*.png
+.env
