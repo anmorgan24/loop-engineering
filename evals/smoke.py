@@ -130,6 +130,53 @@ SCENARIOS = [
 ]
 
 
+def ablation_checks(conn) -> int:
+    """Prove each flag changes the outcome it claims to.
+
+    A flag that silently does nothing produces an ablation table full of
+    identical columns, and you would not notice until someone asked about it
+    on stage.
+    """
+    from agent.config import ARMS
+
+    cases = [
+        # (arm, scripted turns, invariants, expected exit, what it demonstrates)
+        ("no_invariants",
+         scripted(("submit_answer", {"sql": REVENUE_LISTPRICE})),
+         REVENUE_BAND, "verified_success",
+         "without rung 5 the wrong revenue is accepted"),
+        ("engineered",
+         scripted(("submit_answer", {"sql": REVENUE_LISTPRICE})),
+         REVENUE_BAND, "no_progress",
+         "with rung 5 it is not"),
+        ("no_blocker_check",
+         scripted(("submit_answer", {"sql": "SELECT method FROM payments"})),
+         Invariants(), "no_progress",
+         "without blocker detection the agent keeps retrying"),
+        ("engineered",
+         scripted(("submit_answer", {"sql": "SELECT method FROM payments"})),
+         Invariants(), "hard_blocker",
+         "with it, the run stops at once"),
+        ("no_progress_check",
+         scripted(("submit_answer", {"sql": REVENUE_LISTPRICE})),
+         REVENUE_BAND, "budget_exhausted",
+         "without progress detection the fuse blows instead"),
+    ]
+
+    failures = 0
+    print("  ablation")
+    for arm, fake, inv, expected, why in cases:
+        llm.propose_action = fake
+        out = loop.run(question="test", question_id="abl", invariants=inv,
+                       budget=Budget(max_iterations=6), conn=conn, config=ARMS[arm])
+        ok = out.exit_reason == expected
+        failures += not ok
+        mark = "ok  " if ok else "FAIL"
+        got = "" if ok else f"  (got {out.exit_reason})"
+        print(f"  {mark} {arm:<18} {why:<48} it={out.iterations}{got}")
+    return failures
+
+
 def main() -> int:
     conn = connect()
     failures = 0
@@ -144,7 +191,11 @@ def main() -> int:
         got = "" if ok else f"  (got {out.exit_reason})"
         print(f"  {mark} {label:<52} -> {expected:<18} it={out.iterations}{got}")
 
-    print(f"\n  {len(SCENARIOS) - failures}/{len(SCENARIOS)} scenarios passed\n")
+    print()
+    failures += ablation_checks(conn)
+
+    total = len(SCENARIOS) + 5
+    print(f"\n  {total - failures}/{total} checks passed\n")
     return 1 if failures else 0
 
 

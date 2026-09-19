@@ -67,9 +67,11 @@ class Budget:
     def elapsed(self) -> float:
         return time.monotonic() - self.started_at
 
-    def exhausted(self) -> Optional[str]:
+    def exhausted(self, multi: bool = True) -> Optional[str]:
         if self.iterations >= self.max_iterations:
             return f"iterations {self.iterations}/{self.max_iterations}"
+        if not multi:
+            return None
         if self.tokens >= self.max_tokens:
             return f"tokens {self.tokens}/{self.max_tokens}"
         if self.elapsed >= self.max_seconds:
@@ -158,7 +160,7 @@ def rung_stalled(state: State, window: int = NO_PROGRESS_WINDOW) -> bool:
     return len({a.rung_reached for a in tail}) == 1 and not any(a.ok for a in tail)
 
 
-def should_continue(state: State, budget: Budget) -> ExitDecision:
+def should_continue(state: State, budget: Budget, config=None) -> ExitDecision:
     """The only function permitted to end the loop.
 
     Order matters. Success is checked first so a solved task never reports as
@@ -176,17 +178,18 @@ def should_continue(state: State, budget: Budget) -> ExitDecision:
         return ExitDecision(True, ExitReason.ESCALATE,
                             f"{state.malformed_streak} malformed actions in a row")
 
-    dup = repeated_action(state)
-    if dup is not None:
-        return ExitDecision(True, ExitReason.NO_PROGRESS,
-                            f"same query fingerprint {NO_PROGRESS_WINDOW} times running")
+    if config is None or config.detect_no_progress:
+        dup = repeated_action(state)
+        if dup is not None:
+            return ExitDecision(True, ExitReason.NO_PROGRESS,
+                                f"same query fingerprint {NO_PROGRESS_WINDOW} times running")
 
-    if rung_stalled(state):
-        return ExitDecision(True, ExitReason.NO_PROGRESS,
-                            f"stuck at rung {state.max_rung} for "
-                            f"{NO_PROGRESS_WINDOW} attempts")
+        if rung_stalled(state):
+            return ExitDecision(True, ExitReason.NO_PROGRESS,
+                                f"stuck at rung {state.max_rung} for "
+                                f"{NO_PROGRESS_WINDOW} attempts")
 
-    spent = budget.exhausted()
+    spent = budget.exhausted(multi=(config is None or config.multi_budget))
     if spent is not None:
         return ExitDecision(True, ExitReason.BUDGET_EXHAUSTED, spent)
 

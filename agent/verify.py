@@ -364,7 +364,11 @@ def check_invariants(conn, tree, rows, columns, inv: Invariants) -> VerifierResu
 # the ladder
 # --------------------------------------------------------------------------
 
-def verify(sql: str, conn, schema: dict, inv: Optional[Invariants] = None) -> VerifierResult:
+def verify(sql: str, conn, schema: dict, inv: Optional[Invariants] = None,
+           stop_after: Rung = Rung.INVARIANTS) -> VerifierResult:
+    """Run the ladder. `stop_after` truncates it, which is how the ablation
+    arm measures what rung 5 is worth: stop at EXECUTE and the gate accepts
+    anything the engine ran."""
     inv = inv or Invariants()
 
     try:
@@ -397,6 +401,9 @@ def verify(sql: str, conn, schema: dict, inv: Optional[Invariants] = None) -> Ve
             "query returned more than the 50,000 row cap; aggregate or narrow it",
             rows, columns, truncated=True,
         )
+
+    if stop_after <= Rung.EXECUTE:
+        return VerifierResult(Rung.EXECUTE, True, "executed", rows, columns)
 
     result = check_invariants(conn, tree, rows, columns, inv)
     result.truncated = False

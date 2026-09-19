@@ -12,13 +12,14 @@ from typing import Optional
 
 from agent import llm
 from agent.classify import (Classification, ErrorClass, classify_exception,
-                            classify_tool_error, classify_verifier)
+                            classify_tool_error, classify_verifier, naive_feedback)
+from agent.config import ENGINEERED, LoopConfig
 from agent.db import connect, schema_map
 from agent.gate import (Attempt, Budget, ExitDecision, ExitReason, State,
                         should_continue)
 from agent.llm import track, update_span, update_trace
 from agent.tools import TOOL_NAMES, TOOL_SPECS, dispatch
-from agent.verify import Invariants, canonical_hash, verify
+from agent.verify import Invariants, Rung, canonical_hash, verify
 
 
 @dataclass
@@ -50,8 +51,9 @@ class Outcome:
 
 
 @track(name="verify", type="tool")
-def _verify_step(sql, conn, schema, inv):
-    result = verify(sql, conn, schema, inv)
+def _verify_step(sql, conn, schema, inv, config):
+    stop_after = Rung.INVARIANTS if config.verify_invariants else Rung.EXECUTE
+    result = verify(sql, conn, schema, inv, stop_after=stop_after)
     update_span(metadata={"rung": int(result.rung), "ok": result.ok,
                           "empty_cause": result.empty_cause})
     return result
@@ -74,7 +76,9 @@ def _model_step(messages, tools):
 
 @track(name="sql_agent_run")
 def run(question: str, question_id: str = "", invariants: Optional[Invariants] = None,
-        budget: Optional[Budget] = None, conn=None, verbose: bool = False) -> Outcome:
+        budget: Optional[Budget] = None, conn=None, verbose: bool = False,
+        config: Optional[LoopConfig] = None) -> Outcome:
+    config = config or ENGINEERED
     conn = conn or connect()
     schema = schema_map(conn)
     budget = budget or Budget()
@@ -86,9 +90,9 @@ def run(question: str, question_id: str = "", invariants: Optional[Invariants] =
 
     while True:
         # The only thing that can end this loop.
-        decision: ExitDecision = should_continue(state, budget)
+        decision: ExitDecision = should_continue(state, budget, config)
         if decision.stop:
-            return _finish(state, budget, decision, question, question_id, started)
+            return _finish(state, budget, decision, question, question_id, started, config)
 
         # The one non-deterministic step.
         try:
@@ -117,7 +121,8 @@ def run(question: str, question_id: str = "", invariants: Optional[Invariants] =
 
         results = []
         for call in turn.tool_calls:
-            feedback, attempt = _handle_call(call, state, budget, conn, schema, inv, verbose)
+            feedback, attempt = _handle_call(call, state, budget, conn, schema, inv,
+                                             verbose, config)
             results.append({"type": "tool_result", "tool_use_id": call["id"],
                             "content": feedback})
             if attempt is not None:
@@ -125,7 +130,7 @@ def run(question: str, question_id: str = "", invariants: Optional[Invariants] =
         messages.append({"role": "user", "content": results})
 
 
-def _handle_call(call, state, budget, conn, schema, inv, verbose):
+def _handle_call(call, state, budget, conn, schema, inv, verbose, config):
     name, args = call["name"], call.get("input") or {}
 
     if name not in TOOL_NAMES:
@@ -135,8 +140,8 @@ def _handle_call(call, state, budget, conn, schema, inv, verbose):
 
     if name == "submit_answer":
         sql = args.get("sql", "")
-        result = _verify_step(sql, conn, schema, inv)
-        c = classify_verifier(result)
+        result = _verify_step(sql, conn, schema, inv, config)
+        c = classify_verifier(result, detect_blockers=config.detect_blockers)
 
         if c.kind is ErrorClass.HARD_BLOCKER:
             state.blocked = c
@@ -150,7 +155,8 @@ def _handle_call(call, state, budget, conn, schema, inv, verbose):
             print(f"  [{budget.iterations}] submit -> rung {int(result.rung)} {mark} "
                   f"{c.kind.value if not result.ok else ''}")
 
-        feedback = ("Accepted." if result.ok else c.feedback)
+        feedback = ("Accepted." if result.ok
+                    else (c.feedback if config.classify_errors else naive_feedback(result)))
         return feedback, Attempt(budget.iterations, name, sql, canonical_hash(sql),
                                  int(result.rung), result.ok, c.kind, result.detail)
 
@@ -163,17 +169,18 @@ def _handle_call(call, state, budget, conn, schema, inv, verbose):
                             0, True, ErrorClass.NONE, "")
     except BaseException as e:  # noqa: BLE001
         c = classify_exception(e)
-        if "not granted" in str(e):
+        if "not granted" in str(e) and config.detect_blockers:
             c = Classification(ErrorClass.HARD_BLOCKER, str(e),
                                feedback="that table cannot be read by this agent")
             state.blocked = c
         if verbose:
             print(f"  [{budget.iterations}] {name} -> {c.kind.value}")
-        return c.feedback or str(e), Attempt(budget.iterations, name, args.get("sql"),
-                                             None, 0, False, c.kind, str(e))
+        fb = (c.feedback or str(e)) if config.classify_errors else f"Error: {e}"
+        return fb, Attempt(budget.iterations, name, args.get("sql"),
+                           None, 0, False, c.kind, str(e))
 
 
-def _finish(state, budget, decision, question, question_id, started) -> Outcome:
+def _finish(state, budget, decision, question, question_id, started, config) -> Outcome:
     outcome = Outcome(
         question_id=question_id,
         question=question,
@@ -189,5 +196,6 @@ def _finish(state, budget, decision, question, question_id, started) -> Outcome:
         detail=decision.detail,
     )
     # The single most useful field in the whole trace.
-    update_trace(metadata=outcome.summary(), tags=["engineered", outcome.exit_reason])
+    update_trace(metadata=outcome.summary() | {"arm": config.label},
+                 tags=[config.label, outcome.exit_reason])
     return outcome

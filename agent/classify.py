@@ -106,7 +106,7 @@ def classify_tool_error(tool_name: str, known_tools: set[str], msg: str) -> Clas
     return Classification(ErrorClass.SEMANTIC, msg, feedback=msg)
 
 
-def classify_verifier(result: VerifierResult) -> Classification:
+def classify_verifier(result: VerifierResult, detect_blockers: bool = True) -> Classification:
     """Map a rung failure onto an error class.
 
     Note where the line falls. A hallucinated column is SEMANTIC, because the
@@ -124,7 +124,7 @@ def classify_verifier(result: VerifierResult) -> Classification:
         )
 
     if result.rung is Rung.RESOLVE:
-        if result.detail.startswith("PERMISSION_DENIED"):
+        if result.detail.startswith("PERMISSION_DENIED") and detect_blockers:
             return Classification(
                 ErrorClass.HARD_BLOCKER, result.detail,
                 feedback=(
