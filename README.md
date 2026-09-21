@@ -34,7 +34,8 @@ export OPIK_WORKSPACE=...
 ## Run
 
 ```bash
-make smoke        # full loop test, no API key needed, ~5 seconds
+make audit        # check the questions before trusting any number
+make smoke        # full loop + ablation test, no API key needed, ~5 seconds
 make naive        # the before corpus, 25 tasks
 make engineered   # the after corpus, 25 tasks
 make report       # the table and out/exit_reasons.png
@@ -87,6 +88,16 @@ model_said_done     naive loop only, and the reason it is naive
 Logging the exit reason on every trace is the single highest-signal change in
 this repo. Its distribution over a corpus tells you what kind of loop problem
 you have before you open a single trace.
+
+## Audit the questions first
+
+`make audit` checks every question for three things that silently corrupt
+results: a LIMIT that cuts a tie, an output shape the question never pins down,
+and invariants too weak to reject a wrong answer. The first draft of the suite
+had six such bugs. They did not look like bugs, they looked like the agent
+failing, and they would have gone on a slide.
+
+Run it after adding or editing any question.
 
 ## Caveats
 

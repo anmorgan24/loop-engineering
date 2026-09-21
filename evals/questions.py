@@ -41,7 +41,8 @@ QUESTIONS: list[Question] = [
     Question(
         "q02", "easy", "How many orders have been placed in total?",
         "SELECT count(*) AS n FROM orders",
-        Invariants(expected_columns=1, value_band=(0, 1300, 1300)),
+        Invariants(expected_columns=1, value_band=(0, 1300, 1300),
+                   reconcile_sql="SELECT count(DISTINCT order_id) FROM orders"),
     ),
     Question(
         "q03", "easy", "How many products are currently active in the catalogue?",
@@ -72,30 +73,50 @@ QUESTIONS: list[Question] = [
 
     # -------------------------------------------------------------- medium
     Question(
-        "q08", "medium", "Which product category has the most products in it?",
-        """SELECT c.category_name, count(*) AS n
-           FROM products p JOIN categories c USING(category_id)
-           GROUP BY c.category_name ORDER BY n DESC, c.category_name LIMIT 1""",
-        Invariants(expected_columns=2, row_band=(1, 1)),
+        "q08", "medium",
+        "Which single product category generated the most revenue from completed "
+        "orders? Return exactly two columns: the category name and the revenue.",
+        """SELECT ct.category_name,
+                  round(sum(i.quantity * i.unit_price * (1 - i.discount)), 2) AS revenue
+           FROM order_items i
+           JOIN orders o USING(order_id)
+           JOIN products p USING(product_id)
+           JOIN categories ct USING(category_id)
+           WHERE o.status = 'completed'
+           GROUP BY ct.category_name ORDER BY revenue DESC LIMIT 1""",
+        Invariants(expected_columns=2, row_band=(1, 1),
+                   value_band=(1, 350_000, 400_000)),
+        note="replaced an earlier version that was an 8-way tie; every category "
+             "holds exactly 6 products, so 'most products' had no answer",
     ),
     Question(
         "q09", "medium",
-        "How many orders has each region placed? Include customers with no region "
-        "assigned as a separate group.",
+        "How many orders has each region placed? Put customers with no region into "
+        "their own group and label it exactly 'unassigned'. Return exactly two "
+        "columns: the region label and the order count.",
         """SELECT coalesce(r.region_name, 'unassigned') AS region, count(*) AS orders
            FROM orders o
            JOIN customers cu USING(customer_id)
            LEFT JOIN regions r ON cu.region_id = r.region_id
            GROUP BY 1 ORDER BY orders DESC""",
-        Invariants(expected_columns=2, row_band=(7, 7)),
-        note="nullable FK: an inner join to regions silently drops a group",
+        Invariants(expected_columns=2, row_band=(7, 7),
+                   reconcile_sum=(1, "SELECT count(*) FROM orders")),
+        note="nullable FK: an inner join to regions silently drops a group, and "
+             "reconcile_sum is what notices the parts no longer add to the whole",
     ),
     Question(
-        "q10", "medium", "What are the top 5 products by total quantity sold?",
+        "q10", "medium",
+        "What are the top 5 products by total quantity sold on completed orders? "
+        "Return exactly two columns: the product name and the quantity.",
         """SELECT p.product_name, sum(i.quantity) AS qty
-           FROM order_items i JOIN products p USING(product_id)
+           FROM order_items i
+           JOIN orders o USING(order_id)
+           JOIN products p USING(product_id)
+           WHERE o.status = 'completed'
            GROUP BY p.product_name ORDER BY qty DESC, p.product_name LIMIT 5""",
-        Invariants(expected_columns=2, row_band=(5, 5)),
+        Invariants(expected_columns=2, row_band=(5, 5), value_band=(1, 150, 400)),
+        note="'sold' without a status filter has three defensible readings that "
+             "produce three different top-5 lists",
     ),
     Question(
         "q11", "medium",
@@ -111,7 +132,9 @@ QUESTIONS: list[Question] = [
         note="grain: average per order, not per line item",
     ),
     Question(
-        "q12", "medium", "How many customers signed up in each month of 2024?",
+        "q12", "medium",
+        "How many customers signed up in each month of 2024? Return the month as a "
+        "date, the first day of that month, and the count.",
         """SELECT date_trunc('month', signup_date) AS month, count(*) AS n
            FROM customers WHERE year(signup_date) = 2024
            GROUP BY 1 ORDER BY 1""",
@@ -138,15 +161,20 @@ QUESTIONS: list[Question] = [
         Invariants(expected_columns=1, value_band=(0, 1, 12)),
     ),
     Question(
-        "q16", "medium", "Which five customers have placed the most orders?",
+        "q16", "medium",
+        "Which single customer has placed the most orders? Return exactly two "
+        "columns: the customer name and the order count.",
         """SELECT c.customer_name, count(*) AS orders
            FROM orders o JOIN customers c USING(customer_id)
            GROUP BY c.customer_id, c.customer_name
-           ORDER BY orders DESC, c.customer_name LIMIT 5""",
-        Invariants(expected_columns=2, row_band=(5, 5)),
+           ORDER BY orders DESC LIMIT 1""",
+        Invariants(expected_columns=2, row_band=(1, 1), value_band=(1, 10, 30)),
+        note="was top-5, which cut a 5-way tie at rank 5; rank 1 is unique",
     ),
     Question(
-        "q17", "medium", "What share of orders were cancelled or refunded?",
+        "q17", "medium",
+        "What share of all orders were cancelled or refunded? Return it as a "
+        "percentage between 0 and 100, rounded to two decimal places.",
         """SELECT round(100.0 * count(*) FILTER (WHERE status IN ('cancelled','refunded'))
                         / count(*), 2) AS pct
            FROM orders""",
@@ -161,12 +189,20 @@ QUESTIONS: list[Question] = [
         """SELECT round(sum(i.quantity * i.unit_price * (1 - i.discount)), 2) AS revenue
            FROM order_items i JOIN orders o USING(order_id)
            WHERE o.status = 'completed'""",
-        Invariants(expected_columns=1, value_band=(0, 2_150_000, 2_330_000)),
+        Invariants(expected_columns=1, value_band=(0, 2_150_000, 2_330_000),
+                   reconcile_sql="""WITH per_order AS (
+                       SELECT o.order_id,
+                              sum(i.quantity * i.unit_price * (1 - i.discount)) AS v
+                       FROM orders o JOIN order_items i USING(order_id)
+                       WHERE o.status = 'completed' GROUP BY o.order_id)
+                     SELECT sum(v) FROM per_order"""),
         note="list_price instead of unit_price is +19 percent; all statuses is +46 percent",
     ),
     Question(
-        "q19", "trap", "What is the total revenue from completed orders in each region? "
-        "Group customers with no region under 'unassigned'.",
+        "q19", "trap",
+        "What is the total revenue from completed orders in each region? Put "
+        "customers with no region into their own group labelled exactly "
+        "'unassigned'. Return exactly two columns: the region label and the revenue.",
         """SELECT coalesce(r.region_name, 'unassigned') AS region,
                   round(sum(i.quantity * i.unit_price * (1 - i.discount)), 2) AS revenue
            FROM order_items i
@@ -175,8 +211,12 @@ QUESTIONS: list[Question] = [
            LEFT JOIN regions r ON cu.region_id = r.region_id
            WHERE o.status = 'completed'
            GROUP BY 1 ORDER BY revenue DESC""",
-        Invariants(expected_columns=2, row_band=(7, 7)),
-        note="stacks the nullable FK trap on the revenue trap",
+        Invariants(expected_columns=2, row_band=(7, 7), reconcile_sum=(
+            1, """SELECT sum(i.quantity * i.unit_price * (1 - i.discount))
+                  FROM order_items i JOIN orders o USING(order_id)
+                  WHERE o.status = 'completed'""")),
+        note="stacks the nullable FK trap on the revenue trap; reconcile_sum "
+             "catches both a dropped group and a wrong price column",
     ),
     Question(
         "q20", "trap", "Which single product generated the most completed revenue?",

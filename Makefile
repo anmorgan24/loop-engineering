@@ -1,7 +1,10 @@
-.PHONY: seed smoke cost core all report clean
+.PHONY: seed audit smoke cost core pair report clean
 
 seed:     ## build the database
 	python -m agent.db
+
+audit:    ## check questions for ties, ambiguity and weak invariants
+	python -m evals.audit
 
 smoke:    ## full loop + ablation test, no API key needed
 	python -m evals.smoke

@@ -34,7 +34,9 @@ def _norm(v: Any) -> Any:
         return round(float(v), 2)
     if isinstance(v, (dt.date, dt.datetime)):
         return v.isoformat()[:10]
-    return str(v).strip()
+    # Case-folded: capitalisation is presentation, not correctness, and
+    # "Unassigned" versus "unassigned" is not a wrong answer.
+    return str(v).strip().casefold()
 
 
 def _result_set(conn, sql: str) -> Optional[list[tuple]]:

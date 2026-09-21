@@ -58,6 +58,12 @@ class Invariants:
     row_band: Optional[tuple[int, int]] = None
     value_band: Optional[tuple[int, float, float]] = None  # (col_index, lo, hi)
     reconcile_sql: Optional[str] = None
+    # (column_index, control_sql): the sum of that column across every returned
+    # row must match the control scalar. This is the strongest invariant in the
+    # file and the only one that works on grouped results, where reconcile_sql
+    # can only see the first cell. It is what catches an inner join that
+    # silently dropped a group: the parts no longer add up to the whole.
+    reconcile_sum: Optional[tuple] = None
     reconcile_tolerance: float = 0.01
     allow_empty: bool = False
 
@@ -339,6 +345,25 @@ def check_invariants(conn, tree, rows, columns, inv: Invariants) -> VerifierResu
             return fail(
                 f"value {v:,.2f} is outside the plausible band {lo:,.0f} to {hi:,.0f}. "
                 "Check the price column, the status filter, and the join grain."
+            )
+
+    if inv.reconcile_sum is not None:
+        idx, control_sql = inv.reconcile_sum
+        try:
+            ctrl, _, _ = execute_bounded(conn, control_sql, timeout_s=10)
+        except Exception as e:
+            return fail(f"reconciliation control query failed: {e}")
+        want = _as_float(ctrl[0][0]) if ctrl else None
+        parts = [_as_float(r[idx]) for r in rows if idx < len(r)]
+        if want is None or any(p is None for p in parts):
+            return fail(f"reconcile_sum needs numeric values in column {idx}")
+        got = sum(parts)
+        denom = abs(want) or 1.0
+        if abs(got - want) / denom > inv.reconcile_tolerance:
+            return fail(
+                f"the returned rows sum to {got:,.2f} but the total is {want:,.2f}, "
+                f"off by {abs(got-want)/denom:.1%}. A group is missing or double "
+                "counted. Check for an inner join that dropped NULL keys."
             )
 
     if inv.reconcile_sql is not None:
