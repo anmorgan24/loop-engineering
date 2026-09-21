@@ -86,8 +86,9 @@ def main() -> None:
             for a in order)
         print(f"  {label:<26}{cells}")
 
-    line("solve rate", lambda r: r.solve_rate, "%")
-    line("false success rate", lambda r: r.false_success_rate, "%")
+    line("solve rate (answerable)", lambda r: r.answerable_solve_rate, "%")
+    line("false success (answerable)", lambda r: r.answerable_false_success, "%")
+    line("solve rate (all tiers)", lambda r: r.solve_rate, "%")
     line("iters to solve p50", lambda r: r.iters_p50)
     line("iters to solve p95", lambda r: r.iters_p95)
     line("cost per solved", lambda r: r.usd_per_solved, dp=3, prefix="$")
@@ -102,8 +103,20 @@ def main() -> None:
         if any(vals.values()):
             print(f"  {LABELS[k]:<26}" + "".join(f"{vals[a]:>{w}.1f}" for a in order))
 
-    print("\n  blocked tasks handled")
-    print(f"  {'':<26}" + "".join(f"{reps[a][0].blocked_handled:>{w}}" for a in order))
+    n_ans = reps[order[0]][0].n_answerable
+    print(f"\n  answerable questions: {n_ans}. The two tiers below grade whether "
+          "the loop\n  noticed it could not answer, which is a behaviour, not an "
+          "answer, so they\n  are reported separately rather than folded into the "
+          "rate above.")
+    def tier_line(label, attr):
+        cells = "".join(
+            (" ".join(getattr(r, attr) for r in reps[a])).rjust(w) for a in order)
+        print(f"  {label:<26}{cells}")
+
+    print("\n  blocked (permission denied), by trial")
+    tier_line("", "blocked_handled")
+    print("  unanswerable (no such data), by trial")
+    tier_line("", "unanswerable_detected")
 
     from evals.questions import ANSWERABLE
     cal = [q.id for q in ANSWERABLE if q.invariants.value_band is not None]

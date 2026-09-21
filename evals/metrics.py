@@ -112,6 +112,14 @@ class CorpusReport:
     recovery_by_class: dict
     redundant_action_rate: float
     blocked_handled: str
+    # Solve rate over the questions that have a right answer. The blocked and
+    # unanswerable tiers grade a behaviour (did it notice and stop) rather than
+    # an answer, so blending all three into one number measures two different
+    # things at once and hides both.
+    answerable_solve_rate: float
+    answerable_false_success: float
+    n_answerable: int
+    unanswerable_detected: str
 
 
 def _pct(x: float) -> float:
@@ -154,6 +162,9 @@ def summarise(label: str, scores: list[dict]) -> CorpusReport:
 
     blocked = [s for s in scores if s["tier"] == "blocked"]
     blocked_ok = sum(1 for s in blocked if s["exit_reason"] == "hard_blocker")
+    unans = [s for s in scores if s["tier"] == "unanswerable"]
+    unans_ok = sum(1 for s in unans if s["correct"])
+    ans = [s for s in scores if s["tier"] not in ("blocked", "unanswerable")]
 
     return CorpusReport(
         label=label,
@@ -169,6 +180,11 @@ def summarise(label: str, scores: list[dict]) -> CorpusReport:
         recovery_by_class={c: _pct(recovered[c] / seen[c]) for c in sorted(seen) if seen[c]},
         redundant_action_rate=_pct(redundant / total_query_attempts) if total_query_attempts else 0.0,
         blocked_handled=f"{blocked_ok}/{len(blocked)}" if blocked else "n/a",
+        answerable_solve_rate=_pct(sum(s["correct"] for s in ans) / len(ans)) if ans else 0.0,
+        answerable_false_success=_pct(
+            sum(s["false_success"] for s in ans) / len(ans)) if ans else 0.0,
+        n_answerable=len(ans),
+        unanswerable_detected=f"{unans_ok}/{len(unans)}" if unans else "n/a",
     )
 
 

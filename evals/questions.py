@@ -317,20 +317,28 @@ QUESTIONS: list[Question] = [
     ),
     Question(
         "q28", "hard",
-        "What was the month-over-month change in completed revenue for each month "
-        "of 2025? Return exactly two columns: the month as a date (first of the "
-        "month) and the change versus the previous month. The first month of the "
-        "year has no previous month within 2025, so omit it.",
+        "For each month of 2025, what was the completed revenue and how much did "
+        "it change from the previous calendar month? Use December 2024 as the "
+        "previous month for January 2025. Return exactly three columns: the month "
+        "as a date (first of the month), the revenue, and the change.",
         """WITH m AS (
              SELECT date_trunc('month', o.order_date) AS month,
                     sum(i.quantity * i.unit_price * (1 - i.discount)) AS rev
              FROM orders o JOIN order_items i USING(order_id)
-             WHERE o.status = 'completed' AND year(o.order_date) = 2025
-             GROUP BY 1)
-           SELECT month, round(rev - lag(rev) OVER (ORDER BY month), 2) AS change
-           FROM m QUALIFY lag(rev) OVER (ORDER BY month) IS NOT NULL""",
-        Invariants(expected_columns=2, row_band=(11, 11)),
-        note="window lag; the omit-the-first-month instruction is easy to miss",
+             WHERE o.status = 'completed'
+             GROUP BY 1),
+           lagged AS (
+             SELECT month, rev, lag(rev) OVER (ORDER BY month) AS prev FROM m)
+           SELECT month, round(rev, 2) AS revenue, round(rev - prev, 2) AS change
+           FROM lagged WHERE year(month) = 2025 ORDER BY month""",
+        Invariants(expected_columns=3, row_band=(12, 12), reconcile_sum=(
+            1, """SELECT sum(i.quantity * i.unit_price * (1 - i.discount))
+                  FROM orders o JOIN order_items i USING(order_id)
+                  WHERE o.status = 'completed' AND year(o.order_date) = 2025""")),
+        note="the lag has to reach outside the filtered range, so the WHERE must "
+             "come after the window, not before. An earlier version asked for "
+             "2025 only and said to omit January, which had two defensible row "
+             "counts and failed in all 15 runs across every arm",
     ),
     Question(
         "q29", "hard",

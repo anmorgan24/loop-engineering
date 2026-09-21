@@ -117,6 +117,21 @@ failing, and they would have gone on a slide.
 
 Run it after adding or editing any question.
 
+## Three tiers, three questions being asked
+
+The suite mixes questions that have a right answer with questions that do not,
+and blending them into one score measures two different things at once.
+
+- **answerable** (easy, medium, trap, hard): graded against a gold result set.
+  This is the solve rate.
+- **blocked**: needs a table the agent may not read. Graded on whether the loop
+  stopped rather than kept rewriting. The agent is told, via an error.
+- **unanswerable**: the data does not exist anywhere in the schema and nothing
+  is denied. The agent has to work it out from the catalogue. Detection here is
+  unreliable even in the full loop, which is a finding rather than a bug.
+
+`make report` prints all three separately.
+
 ## Caveats
 
 - 25 hand-written questions against one schema is enough to show a difference
