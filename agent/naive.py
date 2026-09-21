@@ -28,6 +28,7 @@ in the numbers is attributable to the loop rather than to anything else.
 from __future__ import annotations
 
 import time
+from dataclasses import asdict
 from typing import Optional
 
 from agent import llm
@@ -91,14 +92,21 @@ def run(question: str, question_id: str = "", invariants: Optional[Invariants] =
 
             try:
                 out = dispatch(name, args, conn)
-                state.record(Attempt(budget.iterations, name, args.get("sql"), None,
-                                     0, True, ErrorClass.NONE, ""))
+                # Fingerprint exploratory queries too. The engineered loop
+                # does, and measuring only one of them makes the redundant
+                # action rate an artefact of instrumentation, not behaviour.
+                state.record(Attempt(
+                    budget.iterations, name, args.get("sql"),
+                    canonical_hash(args["sql"]) if args.get("sql") else None,
+                    0, True, ErrorClass.NONE, ""))
             except BaseException as e:  # noqa: BLE001
                 # The raw error, unclassified. A permission denial reads the
                 # same as a typo, so the agent tries again.
                 out = f"Error: {e}"
-                state.record(Attempt(budget.iterations, name, args.get("sql"), None,
-                                     0, False, ErrorClass.SEMANTIC, str(e)))
+                state.record(Attempt(
+                    budget.iterations, name, args.get("sql"),
+                    canonical_hash(args["sql"]) if args.get("sql") else None,
+                    0, False, ErrorClass.SEMANTIC, str(e)))
                 if verbose:
                     print(f"  [{budget.iterations}] {name} -> error: {str(e)[:60]}")
             results.append({"type": "tool_result", "tool_use_id": call["id"],
@@ -120,7 +128,8 @@ def run(question: str, question_id: str = "", invariants: Optional[Invariants] =
         answer_sql=state.answer_sql,
         answer_rows=state.answer_rows[:50],
         max_rung=0,
-        attempts=[],
+        attempts=[asdict(a) | {"error_class": a.error_class.value}
+                  for a in state.attempts],
         detail="",
     )
     update_trace(metadata=outcome.summary(), tags=["naive", outcome.exit_reason])

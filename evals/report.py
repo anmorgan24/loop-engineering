@@ -35,14 +35,25 @@ ARM_LABELS = {"naive": "naive", "engineered": "engineered",
 
 
 def load_all() -> dict:
-    """arm -> list of per-trial score lists."""
+    """arm -> list of per-trial score lists. Ignores --limit probe runs."""
     byarm = defaultdict(list)
     for p in sorted(OUT.glob("*__t*.json")):
+        if "__limit" in p.name:
+            continue
         d = json.loads(p.read_text())
         byarm[d["arm"]].append(d["scores"])
     if not byarm:
         raise SystemExit(
             "no results in out/. Run: python -m evals.run_corpus --arm naive engineered")
+
+    # Arms with different task counts are not comparable. Say so loudly
+    # rather than printing a table that looks fine.
+    sizes = {a: sorted({len(t) for t in trials}) for a, trials in byarm.items()}
+    if len({n for ns in sizes.values() for n in ns}) > 1:
+        print("\n  WARNING: arms have different task counts and are NOT comparable")
+        for a, ns in sizes.items():
+            print(f"    {a:<20} {ns}")
+        print("    delete the short files in out/ and rerun those arms\n")
     return dict(byarm)
 
 

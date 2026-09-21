@@ -35,6 +35,19 @@ OUT = pathlib.Path(__file__).resolve().parent.parent / "out"
 ALL_ARMS = ["naive"] + list(ARMS)
 
 
+def result_path(arm: str, trial: int, limit=None) -> pathlib.Path:
+    """Where an arm's results go.
+
+    A --limit run gets its own name. Otherwise a three-task cost probe writes
+    the same file as a full trial, and the resume check below then skips the
+    real run because "trial 1 already exists". That happened, and the report
+    quietly averaged a 3-task arm against 25-task arms.
+    """
+    if limit:
+        return OUT / f"{arm}__limit{limit}.json"
+    return OUT / f"{arm}__t{trial}.json"
+
+
 def run_arm(arm: str, trial: int, limit=None, verbose: bool = True) -> list:
     questions = QUESTIONS[:limit] if limit else QUESTIONS
     conn = connect()
@@ -68,8 +81,9 @@ def run_arm(arm: str, trial: int, limit=None, verbose: bool = True) -> list:
                   f"${outcome.usd:.4f} {time.monotonic()-t0:.1f}s")
 
     OUT.mkdir(exist_ok=True)
-    (OUT / f"{arm}__t{trial}.json").write_text(
-        json.dumps({"arm": arm, "trial": trial, "scores": scores}, indent=2, default=str))
+    result_path(arm, trial, limit).write_text(
+        json.dumps({"arm": arm, "trial": trial, "n_tasks": len(questions),
+                    "scores": scores}, indent=2, default=str))
 
     rep = summarise(arm, scores)
     print(f"    -> solve {rep.solve_rate}%  false-success {rep.false_success_rate}%  "
@@ -104,9 +118,13 @@ def main() -> None:
     started = time.monotonic()
     for trial in range(1, args.trials + 1):
         for arm in arms:
-            if (OUT / f"{arm}__t{trial}.json").exists():
-                print(f"  {arm} trial {trial}: already done, skipping")
-                continue
+            path = result_path(arm, trial, args.limit)
+            if path.exists():
+                done = len(json.loads(path.read_text())["scores"])
+                if done == n_tasks:
+                    print(f"  {arm} trial {trial}: already done, skipping")
+                    continue
+                print(f"  {arm} trial {trial}: found {done}/{n_tasks} tasks, rerunning")
             print(f"  === {arm}, trial {trial} ===")
             run_arm(arm, trial, limit=args.limit)
 

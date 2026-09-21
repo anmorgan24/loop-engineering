@@ -6,7 +6,7 @@ seed:     ## build the database
 smoke:    ## full loop + ablation test, no API key needed
 	python -m evals.smoke
 
-cost:     ## 3 tasks, one arm, to measure spend before committing
+cost:     ## 3 tasks, one arm, to measure spend (writes out/engineered__limit3.json, ignored by report)
 	python -m evals.run_corpus --arm engineered --limit 3
 
 core:     ## naive + engineered + 2 ablations, 3 trials each
