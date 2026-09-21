@@ -29,7 +29,8 @@ LABELS = {"model_said_done": "model said done", "budget_exhausted": "budget exha
           "hard_blocker": "hard blocker", "verified_success": "verified success"}
 
 ARM_LABELS = {"naive": "naive", "engineered": "engineered",
-              "no_invariants": "no rung 5", "no_feedback": "raw error text",
+              "answer_free": "answer-free only", "no_invariants": "no rung 5",
+              "no_feedback": "raw error text",
               "no_progress_check": "no progress check",
               "no_blocker_check": "no blocker check"}
 
@@ -66,8 +67,9 @@ def spread(vals: list[float], dp: int = 1) -> str:
 
 def main() -> None:
     byarm = load_all()
-    order = [a for a in ["naive", "engineered", "no_invariants", "no_feedback",
-                         "no_progress_check", "no_blocker_check"] if a in byarm]
+    order = [a for a in ["naive", "no_invariants", "answer_free", "engineered",
+                         "no_feedback", "no_progress_check", "no_blocker_check"]
+             if a in byarm]
     reps = {a: [summarise(a, t) for t in byarm[a]] for a in order}
     ntrials = {a: len(byarm[a]) for a in order}
 
@@ -102,6 +104,14 @@ def main() -> None:
 
     print("\n  blocked tasks handled")
     print(f"  {'':<26}" + "".join(f"{reps[a][0].blocked_handled:>{w}}" for a in order))
+
+    from evals.questions import ANSWERABLE
+    cal = [q.id for q in ANSWERABLE if q.invariants.value_band is not None]
+    print(f"\n  {len(cal)}/{len(ANSWERABLE)} answerable questions carry a calibrated "
+          f"magnitude band:\n    {', '.join(cal)}")
+    print("  Those bands were written with the answers in hand. The answer-free "
+          "arm\n  drops them, and the gap is the part of the score that needed "
+          "prior knowledge.")
 
     chart_exits(reps, order)
     if len([a for a in order if a not in ("naive",)]) > 1:

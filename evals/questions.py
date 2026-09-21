@@ -36,18 +36,21 @@ QUESTIONS: list[Question] = [
     Question(
         "q01", "easy", "How many customers are in the database?",
         "SELECT count(*) AS n FROM customers",
-        Invariants(expected_columns=1, value_band=(0, 200, 200)),
+        Invariants(expected_columns=1,
+                   reconcile_sql="SELECT count(DISTINCT customer_id) FROM customers"),
     ),
     Question(
         "q02", "easy", "How many orders have been placed in total?",
         "SELECT count(*) AS n FROM orders",
-        Invariants(expected_columns=1, value_band=(0, 1300, 1300),
+        Invariants(expected_columns=1,
                    reconcile_sql="SELECT count(DISTINCT order_id) FROM orders"),
     ),
     Question(
         "q03", "easy", "How many products are currently active in the catalogue?",
         "SELECT count(*) AS n FROM products WHERE is_active",
-        Invariants(expected_columns=1, value_band=(0, 30, 48)),
+        Invariants(expected_columns=1, reconcile_sql=(
+            "SELECT (SELECT count(*) FROM products) "
+            "- (SELECT count(*) FROM products WHERE NOT is_active)")),
         note="soft delete: the answer is not count(*) from products",
     ),
     Question(
@@ -58,12 +61,15 @@ QUESTIONS: list[Question] = [
     Question(
         "q05", "easy", "How many customers have churned?",
         "SELECT count(*) AS n FROM customers WHERE is_churned",
-        Invariants(expected_columns=1, value_band=(0, 10, 90)),
+        Invariants(expected_columns=1, reconcile_sql=(
+            "SELECT (SELECT count(*) FROM customers) "
+            "- (SELECT count(*) FROM customers WHERE NOT is_churned)")),
     ),
     Question(
         "q06", "easy", "How many orders are there in each status?",
         "SELECT status, count(*) AS n FROM orders GROUP BY status ORDER BY n DESC",
-        Invariants(expected_columns=2, row_band=(4, 4)),
+        Invariants(expected_columns=2, row_band=(4, 4),
+                   reconcile_sum=(1, "SELECT count(*) FROM orders")),
     ),
     Question(
         "q07", "easy", "What are the earliest and latest order dates?",
@@ -138,13 +144,16 @@ QUESTIONS: list[Question] = [
         """SELECT date_trunc('month', signup_date) AS month, count(*) AS n
            FROM customers WHERE year(signup_date) = 2024
            GROUP BY 1 ORDER BY 1""",
-        Invariants(expected_columns=2, row_band=(10, 12)),
+        Invariants(expected_columns=2, row_band=(10, 12), reconcile_sum=(
+            1, "SELECT count(*) FROM customers WHERE year(signup_date) = 2024")),
     ),
     Question(
         "q13", "medium", "How many customers have never placed an order?",
         """SELECT count(*) AS n FROM customers c
            WHERE NOT EXISTS (SELECT 1 FROM orders o WHERE o.customer_id = c.customer_id)""",
-        Invariants(expected_columns=1, value_band=(0, 0, 40)),
+        Invariants(expected_columns=1, reconcile_sql=(
+            "SELECT (SELECT count(*) FROM customers) "
+            "- (SELECT count(DISTINCT customer_id) FROM orders)")),
     ),
     Question(
         "q14", "medium", "How many line items does the average order contain?",
@@ -178,7 +187,10 @@ QUESTIONS: list[Question] = [
         """SELECT round(100.0 * count(*) FILTER (WHERE status IN ('cancelled','refunded'))
                         / count(*), 2) AS pct
            FROM orders""",
-        Invariants(expected_columns=1, value_band=(0, 5, 35)),
+        Invariants(expected_columns=1, reconcile_sql=(
+            "SELECT round(100.0 * (SELECT count(*) FROM orders "
+            "WHERE status = 'cancelled' OR status = 'refunded') "
+            "/ (SELECT count(*) FROM orders), 2)")),
     ),
 
     # ---------------------------------------------------------------- trap
@@ -190,6 +202,7 @@ QUESTIONS: list[Question] = [
            FROM order_items i JOIN orders o USING(order_id)
            WHERE o.status = 'completed'""",
         Invariants(expected_columns=1, value_band=(0, 2_150_000, 2_330_000),
+                   # band is calibrated; the reconcile below is answer-free
                    reconcile_sql="""WITH per_order AS (
                        SELECT o.order_id,
                               sum(i.quantity * i.unit_price * (1 - i.discount)) AS v
@@ -242,7 +255,10 @@ QUESTIONS: list[Question] = [
         """SELECT count(DISTINCT p.product_id) AS n
            FROM products p JOIN order_items i USING(product_id)
            WHERE NOT p.is_active""",
-        Invariants(expected_columns=1, value_band=(0, 1, 20)),
+        Invariants(expected_columns=1, reconcile_sql=(
+            "SELECT count(*) FROM products p WHERE NOT p.is_active "
+            "AND EXISTS (SELECT 1 FROM order_items i "
+            "WHERE i.product_id = p.product_id)")),
         note="soft delete plus DISTINCT; without DISTINCT you count line items",
     ),
     Question(
@@ -250,6 +266,182 @@ QUESTIONS: list[Question] = [
         "SELECT count(*) AS n FROM orders WHERE order_date > DATE '2026-06-01'",
         Invariants(expected_columns=1, value_band=(0, 0, 0), allow_empty=True),
         note="the answer really is zero; allow_empty stops the gate fighting a correct result",
+    ),
+
+
+    # ----------------------------------------------------------------- hard
+    # Added because the first 25 produced zero variance: the engineered loop
+    # solved every answerable task in every trial, so no_progress and
+    # budget_exhausted never appeared outside the smoke test. A suite with no
+    # failures measures the suite, not the loop.
+    Question(
+        "q26", "hard",
+        "For each region, which single product sold the most units on completed "
+        "orders? Put customers with no region into a group labelled exactly "
+        "'unassigned'. Return exactly three columns: the region label, the "
+        "product name, and the units.",
+        """WITH units AS (
+             SELECT coalesce(r.region_name, 'unassigned') AS region,
+                    p.product_name, sum(i.quantity) AS units
+             FROM order_items i
+             JOIN orders o USING(order_id)
+             JOIN products p USING(product_id)
+             JOIN customers cu USING(customer_id)
+             LEFT JOIN regions r ON cu.region_id = r.region_id
+             WHERE o.status = 'completed'
+             GROUP BY 1, 2),
+           ranked AS (
+             SELECT *, row_number() OVER (PARTITION BY region
+                                          ORDER BY units DESC, product_name) AS rk
+             FROM units)
+           SELECT region, product_name, units FROM ranked WHERE rk = 1""",
+        Invariants(expected_columns=3, row_band=(7, 7)),
+        note="window function plus the nullable-region trap plus a status filter",
+    ),
+    Question(
+        "q27", "hard",
+        "How many customers placed at least one order in every quarter of 2025? "
+        "Return a single number.",
+        """SELECT count(*) AS n FROM (
+             SELECT o.customer_id
+             FROM orders o WHERE year(o.order_date) = 2025
+             GROUP BY o.customer_id
+             HAVING count(DISTINCT quarter(o.order_date)) = 4)""",
+        Invariants(expected_columns=1, reconcile_sql="""
+            SELECT count(*) FROM customers c WHERE NOT EXISTS (
+              SELECT 1 FROM (VALUES (1),(2),(3),(4)) AS q(qtr)
+              WHERE NOT EXISTS (
+                SELECT 1 FROM orders o WHERE o.customer_id = c.customer_id
+                  AND year(o.order_date) = 2025 AND quarter(o.order_date) = q.qtr))"""),
+        note="relational division; the reconcile is written inside out on purpose",
+    ),
+    Question(
+        "q28", "hard",
+        "What was the month-over-month change in completed revenue for each month "
+        "of 2025? Return exactly two columns: the month as a date (first of the "
+        "month) and the change versus the previous month. The first month of the "
+        "year has no previous month within 2025, so omit it.",
+        """WITH m AS (
+             SELECT date_trunc('month', o.order_date) AS month,
+                    sum(i.quantity * i.unit_price * (1 - i.discount)) AS rev
+             FROM orders o JOIN order_items i USING(order_id)
+             WHERE o.status = 'completed' AND year(o.order_date) = 2025
+             GROUP BY 1)
+           SELECT month, round(rev - lag(rev) OVER (ORDER BY month), 2) AS change
+           FROM m QUALIFY lag(rev) OVER (ORDER BY month) IS NOT NULL""",
+        Invariants(expected_columns=2, row_band=(11, 11)),
+        note="window lag; the omit-the-first-month instruction is easy to miss",
+    ),
+    Question(
+        "q29", "hard",
+        "How many distinct pairs of products appear together in five or more "
+        "completed orders? Count each unordered pair once. Return a single "
+        "number.",
+        """SELECT count(*) AS n FROM (
+             SELECT i1.product_id AS a, i2.product_id AS b
+             FROM order_items i1
+             JOIN order_items i2 ON i1.order_id = i2.order_id
+                                AND i1.product_id < i2.product_id
+             JOIN orders o ON o.order_id = i1.order_id
+             WHERE o.status = 'completed'
+             GROUP BY 1, 2 HAVING count(DISTINCT i1.order_id) >= 5)""",
+        Invariants(expected_columns=1, reconcile_sql="""
+            WITH pairs AS (
+              SELECT least(i1.product_id, i2.product_id) AS a,
+                     greatest(i1.product_id, i2.product_id) AS b,
+                     i1.order_id
+              FROM order_items i1
+              JOIN order_items i2 ON i1.order_id = i2.order_id
+                                 AND i1.product_id <> i2.product_id
+              JOIN orders o ON o.order_id = i1.order_id
+              WHERE o.status = 'completed')
+            SELECT count(*) FROM (
+              SELECT a, b FROM pairs GROUP BY a, b
+              HAVING count(DISTINCT order_id) >= 5)""",
+        ),
+        note="was 'which pair', which cut a 10-way tie. Self join with an "
+             "inequality to dedupe; the usual mistake double counts every pair, "
+             "and the reconcile uses least/greatest to get there differently",
+    ),
+    Question(
+        "q30", "hard",
+        "How many customers have an average completed order value above the "
+        "overall average completed order value? Return a single number.",
+        """WITH order_value AS (
+             SELECT o.customer_id, o.order_id,
+                    sum(i.quantity * i.unit_price * (1 - i.discount)) AS v
+             FROM orders o JOIN order_items i USING(order_id)
+             WHERE o.status = 'completed'
+             GROUP BY o.customer_id, o.order_id),
+           per_customer AS (
+             SELECT customer_id, avg(v) AS avg_v FROM order_value GROUP BY 1)
+           SELECT count(*) AS n FROM per_customer
+           WHERE avg_v > (SELECT avg(v) FROM order_value)""",
+        Invariants(expected_columns=1, reconcile_sql="""
+            WITH ov AS (
+              SELECT o.customer_id, o.order_id,
+                     sum(i.quantity*i.unit_price*(1-i.discount)) AS v
+              FROM orders o JOIN order_items i USING(order_id)
+              WHERE o.status='completed' GROUP BY 1, 2)
+            SELECT count(*) FROM (
+              SELECT customer_id FROM ov GROUP BY customer_id
+              HAVING avg(v) > (SELECT avg(v) FROM ov))"""),
+        note="nested aggregate at two grains; averaging line items instead of "
+             "orders gives a different and wrong answer",
+    ),
+    Question(
+        "q31", "hard",
+        "What is the median value of a completed order? Return a single number.",
+        """WITH order_value AS (
+             SELECT o.order_id,
+                    sum(i.quantity * i.unit_price * (1 - i.discount)) AS v
+             FROM orders o JOIN order_items i USING(order_id)
+             WHERE o.status = 'completed' GROUP BY o.order_id)
+           SELECT round(median(v), 2) AS median_order_value FROM order_value""",
+        Invariants(expected_columns=1, reconcile_sql="""
+            WITH ov AS (
+              SELECT o.order_id, sum(i.quantity*i.unit_price*(1-i.discount)) AS v
+              FROM orders o JOIN order_items i USING(order_id)
+              WHERE o.status='completed' GROUP BY o.order_id)
+            SELECT round(quantile_cont(v, 0.5), 2) FROM ov"""),
+        note="median at order grain, reconciled against a percentile written "
+             "a different way",
+    ),
+    Question(
+        "q32", "hard",
+        "Which three regions have the highest share of their orders cancelled or "
+        "refunded? Return exactly two columns: the region name and the percentage "
+        "between 0 and 100, rounded to two decimals. Exclude customers with no "
+        "region.",
+        """SELECT r.region_name,
+                  round(100.0 * count(*) FILTER (
+                    WHERE o.status IN ('cancelled','refunded')) / count(*), 2) AS pct
+           FROM orders o
+           JOIN customers cu USING(customer_id)
+           JOIN regions r ON cu.region_id = r.region_id
+           GROUP BY r.region_name ORDER BY pct DESC, r.region_name LIMIT 3""",
+        Invariants(expected_columns=2, row_band=(3, 3)),
+        note="the one question where excluding the null region is correct, "
+             "immediately after two where it is not",
+    ),
+
+    # ------------------------------------------------- unanswerable, no denial
+    # A blocker that is not a permission error. The data simply is not here.
+    # The right behaviour is to notice and stop, and the naive loop cannot.
+    Question(
+        "q33", "unanswerable",
+        "What is the average customer satisfaction rating by region?",
+        None, Invariants(),
+        note="no satisfaction data exists in this schema and no table is denied; "
+             "the agent has to conclude it from the catalogue rather than from "
+             "an error message",
+    ),
+    Question(
+        "q34", "unanswerable",
+        "Which shipping carrier delivers orders fastest?",
+        None, Invariants(),
+        note="there is no carrier column anywhere; shipped_date exists, which "
+             "makes the question look answerable at a glance",
     ),
 
     # ------------------------------------------------------------- blocked

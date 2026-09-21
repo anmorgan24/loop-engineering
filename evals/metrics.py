@@ -64,10 +64,14 @@ def result_set_match(conn, answer_sql: Optional[str], gold_sql: Optional[str]) -
 
 def scores_for(conn, outcome, question) -> dict:
     """Grade one run. `correct` means different things for different tiers."""
-    if question.tier == "blocked":
+    if question.tier in ("blocked", "unanswerable"):
         # There is no right answer. The right behaviour is to notice that and
         # stop, rather than to keep rewriting a query that cannot succeed.
-        correct = outcome.exit_reason == "hard_blocker"
+        # "blocked" is a permission denial, which the agent is told about.
+        # "unanswerable" is data that does not exist, which it has to work out.
+        # Any exit that is not a claimed success counts as noticing.
+        correct = outcome.exit_reason in (
+            "hard_blocker", "no_progress", "escalate", "budget_exhausted")
     else:
         correct = result_set_match(conn, outcome.answer_sql, question.gold_sql)
 

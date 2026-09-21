@@ -59,6 +59,24 @@ venue wifi does not.
 | `evals/metrics.py` | rung 6 and the corpus metrics. Never imported by the loop |
 | `evals/report.py` | the before/after table and the chart |
 
+## Answer-free vs calibrated invariants
+
+Invariants split by what they need to exist.
+
+**Answer-free** ones come from the question and the schema alone: column
+counts, a row count the question states outright, and reconciliation against a
+second, independently written query. You can write them before anyone computes
+the answer, which is the situation the loop is actually in at runtime.
+
+**Calibrated** ones need prior knowledge: a plausible magnitude for revenue,
+a sane range for a count. Legitimate in production, where last month's number
+exists. Not legitimate when derived from the answer key of the suite you are
+scoring.
+
+The `answer_free` arm drops the calibrated set. Reporting both is the honest
+version of a verification claim, and `make report` prints which questions still
+lean on a band.
+
 ## The two ladders
 
 Runtime verification stops at rung 5. Comparing against a gold answer is rung 6

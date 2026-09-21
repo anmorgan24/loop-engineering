@@ -155,10 +155,14 @@ def classify_verifier(result: VerifierResult, detect_blockers: bool = True) -> C
 def naive_feedback(result: VerifierResult) -> str:
     """The before picture.
 
-    This is what most loops send back: the raw error, unclassified and
-    unaugmented. Compare to the `feedback` fields above, which name the
-    available columns and say whether recovery is even possible. The two
-    strings cost the same to produce. Their recovery rates are not the same,
-    and evals/metrics.py measures the gap.
+    This is what most loops send back: the bare fact that something failed,
+    with none of the guidance. "Error: value out of range" instead of the
+    number, the expected band, and the three columns worth checking.
+
+    An earlier version of this function forwarded `result.detail`, which by
+    then already carried the full diagnostic, so the no_feedback arm scored
+    identically to the full loop and appeared to show that feedback quality
+    does not matter. It was measuring nothing. `raw_detail` is the honest
+    stripped version.
     """
-    return f"Error: {result.detail}"
+    return f"Error: {result.raw_detail or result.detail}"

@@ -53,7 +53,8 @@ class Outcome:
 @track(name="verify", type="tool")
 def _verify_step(sql, conn, schema, inv, config):
     stop_after = Rung.INVARIANTS if config.verify_invariants else Rung.EXECUTE
-    result = verify(sql, conn, schema, inv, stop_after=stop_after)
+    result = verify(sql, conn, schema, inv, stop_after=stop_after,
+                    use_calibrated=config.use_calibrated)
     update_span(metadata={"rung": int(result.rung), "ok": result.ok,
                           "empty_cause": result.empty_cause})
     return result

@@ -48,14 +48,33 @@ class Rung(IntEnum):
 
 @dataclass
 class Invariants:
-    """Per-question expectations. Everything is optional.
+    """Per-question expectations, split by what they need to exist.
 
-    These are cheap to write and are the only part of the ladder that needs
-    thought. `reconcile_sql` is the strongest of them: a second, independently
-    written query whose answer must agree with the first.
+    ANSWER-FREE invariants are derivable from the question and the schema
+    alone. You can write them before anyone has computed the answer, and they
+    are honest at runtime, where by definition you do not have it.
+
+        expected_columns   the question says how many columns
+        row_band           the question says how many rows ("exactly five")
+        reconcile_sql      a second, independently written query that must agree
+        reconcile_sum      the returned rows must sum to an independent total
+        allow_empty        zero rows is a legitimate answer here
+
+    CALIBRATED invariants need history or domain knowledge: last month's
+    revenue, a known plausible range. They are legitimate in production, where
+    you have prior numbers. They are NOT legitimate when derived from the
+    answer key of the suite you are scoring, which is cheating with extra
+    steps.
+
+        value_band         a magnitude range for one column
+
+    The arms in agent/config.py let you score with and without the calibrated
+    set, so the gap between them is visible rather than hidden.
     """
+    # answer-free
     expected_columns: Optional[int] = None
     row_band: Optional[tuple[int, int]] = None
+    # calibrated
     value_band: Optional[tuple[int, float, float]] = None  # (col_index, lo, hi)
     reconcile_sql: Optional[str] = None
     # (column_index, control_sql): the sum of that column across every returned
@@ -78,6 +97,10 @@ class VerifierResult:
     truncated: bool = False
     # Which cause the empty-result probe pointed at, when it ran.
     empty_cause: Optional[str] = None
+    # The same failure stated without any guidance. This is what a loop that
+    # does not invest in feedback sends back, and the no_feedback arm uses it
+    # to measure what the guidance is worth.
+    raw_detail: str = ""
 
     @property
     def reached(self) -> int:
@@ -293,9 +316,11 @@ def _as_float(v: Any) -> Optional[float]:
     return None
 
 
-def check_invariants(conn, tree, rows, columns, inv: Invariants) -> VerifierResult:
-    def fail(detail: str, **kw) -> VerifierResult:
-        return VerifierResult(Rung.INVARIANTS, False, detail, rows, columns, **kw)
+def check_invariants(conn, tree, rows, columns, inv: Invariants,
+                     use_calibrated: bool = True) -> VerifierResult:
+    def fail(detail: str, raw: str = "", **kw) -> VerifierResult:
+        return VerifierResult(Rung.INVARIANTS, False, detail, rows, columns,
+                              raw_detail=raw or "result failed validation", **kw)
 
     if not rows:
         if inv.allow_empty:
@@ -319,24 +344,27 @@ def check_invariants(conn, tree, rows, columns, inv: Invariants) -> VerifierResu
                 "join produced nothing."
             ),
         }
-        return fail(messages[cause], empty_cause=cause.value)
+        return fail(messages[cause], raw="empty result", empty_cause=cause.value)
 
     if inv.expected_columns is not None and len(columns) != inv.expected_columns:
-        return fail(f"expected {inv.expected_columns} column(s), got {len(columns)}: {columns}")
+        return fail(f"expected {inv.expected_columns} column(s), got {len(columns)}: {columns}",
+                        raw="wrong number of columns")
 
     for i, name in enumerate(columns):
         if all(r[i] is None for r in rows):
-            return fail(f"column '{name}' is NULL in every row, which is almost never intended")
+            return fail(f"column '{name}' is NULL in every row, which is almost never intended",
+                            raw="a column is entirely NULL")
 
     if inv.row_band is not None:
         lo, hi = inv.row_band
         if not lo <= len(rows) <= hi:
             return fail(
                 f"returned {len(rows)} rows, expected between {lo} and {hi}. "
-                "A count far above the band usually means join fan-out."
+                "A count far above the band usually means join fan-out.",
+                raw="wrong number of rows",
             )
 
-    if inv.value_band is not None:
+    if inv.value_band is not None and use_calibrated:
         idx, lo, hi = inv.value_band
         v = _as_float(rows[0][idx]) if rows and idx < len(rows[0]) else None
         if v is None:
@@ -344,7 +372,8 @@ def check_invariants(conn, tree, rows, columns, inv: Invariants) -> VerifierResu
         if not lo <= v <= hi:
             return fail(
                 f"value {v:,.2f} is outside the plausible band {lo:,.0f} to {hi:,.0f}. "
-                "Check the price column, the status filter, and the join grain."
+                "Check the price column, the status filter, and the join grain.",
+                raw="value out of range",
             )
 
     if inv.reconcile_sum is not None:
@@ -363,7 +392,8 @@ def check_invariants(conn, tree, rows, columns, inv: Invariants) -> VerifierResu
             return fail(
                 f"the returned rows sum to {got:,.2f} but the total is {want:,.2f}, "
                 f"off by {abs(got-want)/denom:.1%}. A group is missing or double "
-                "counted. Check for an inner join that dropped NULL keys."
+                "counted. Check for an inner join that dropped NULL keys.",
+                raw="reconciliation failed",
             )
 
     if inv.reconcile_sql is not None:
@@ -379,7 +409,8 @@ def check_invariants(conn, tree, rows, columns, inv: Invariants) -> VerifierResu
         if drift > inv.reconcile_tolerance:
             return fail(
                 f"result {got:,.2f} disagrees with an independent control query "
-                f"({want:,.2f}), off by {drift:.1%}."
+                f"({want:,.2f}), off by {drift:.1%}.",
+                raw="reconciliation failed",
             )
 
     return VerifierResult(Rung.INVARIANTS, True, "all invariants hold", rows, columns)
@@ -390,7 +421,8 @@ def check_invariants(conn, tree, rows, columns, inv: Invariants) -> VerifierResu
 # --------------------------------------------------------------------------
 
 def verify(sql: str, conn, schema: dict, inv: Optional[Invariants] = None,
-           stop_after: Rung = Rung.INVARIANTS) -> VerifierResult:
+           stop_after: Rung = Rung.INVARIANTS,
+           use_calibrated: bool = True) -> VerifierResult:
     """Run the ladder. `stop_after` truncates it, which is how the ablation
     arm measures what rung 5 is worth: stop at EXECUTE and the gate accepts
     anything the engine ran."""
@@ -399,26 +431,32 @@ def verify(sql: str, conn, schema: dict, inv: Optional[Invariants] = None,
     try:
         tree = parse(sql)
     except ParseError as e:
-        return VerifierResult(Rung.PARSE, False, str(e))
+        return VerifierResult(Rung.PARSE, False, str(e),
+                              raw_detail="syntax error")
 
     try:
         resolve(tree, schema)
     except PermissionDenied as e:
-        return VerifierResult(Rung.RESOLVE, False, f"PERMISSION_DENIED: {e}")
+        return VerifierResult(Rung.RESOLVE, False, f"PERMISSION_DENIED: {e}",
+                              raw_detail="permission denied")
     except ValueError as e:
-        return VerifierResult(Rung.RESOLVE, False, str(e))
+        # `str(e)` here already carries the column catalogue that
+        # _readable_resolve_error appended. raw_detail is the version without
+        # it, which is what most loops actually send.
+        return VerifierResult(Rung.RESOLVE, False, str(e),
+                              raw_detail=str(e).split(" | ")[0])
 
     try:
         plan_ok(conn, sql)
     except Exception as e:
-        return VerifierResult(Rung.PLAN, False, str(e))
+        return VerifierResult(Rung.PLAN, False, str(e), raw_detail="planner rejected query")
 
     try:
         rows, columns, truncated = execute_bounded(conn, sql)
     except ExecutionTimeout as e:
-        return VerifierResult(Rung.EXECUTE, False, str(e))
+        return VerifierResult(Rung.EXECUTE, False, str(e), raw_detail="query timed out")
     except Exception as e:
-        return VerifierResult(Rung.EXECUTE, False, str(e))
+        return VerifierResult(Rung.EXECUTE, False, str(e), raw_detail="query failed")
 
     if truncated:
         return VerifierResult(
@@ -430,6 +468,7 @@ def verify(sql: str, conn, schema: dict, inv: Optional[Invariants] = None,
     if stop_after <= Rung.EXECUTE:
         return VerifierResult(Rung.EXECUTE, True, "executed", rows, columns)
 
-    result = check_invariants(conn, tree, rows, columns, inv)
+    result = check_invariants(conn, tree, rows, columns, inv,
+                              use_calibrated=use_calibrated)
     result.truncated = False
     return result
