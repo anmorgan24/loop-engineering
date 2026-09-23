@@ -57,7 +57,14 @@ def run(question: str, question_id: str = "", invariants: Optional[Invariants] =
     while budget.iterations < budget.max_iterations:
         try:
             turn = llm.propose_action(messages, TOOL_SPECS)
+        except (KeyboardInterrupt, SystemExit):
+            raise
         except BaseException:  # noqa: BLE001
+            # Charge the iteration even though the call failed. Without this
+            # the counter never advances, the while condition can never go
+            # false, and a bad key is an infinite loop rather than a run that
+            # exhausts its budget.
+            budget.charge(tokens=0, usd=0.0, iteration=True)
             time.sleep(2.0)
             continue
 

@@ -86,7 +86,7 @@ def run_arm(arm: str, trial: int, limit=None, verbose: bool = True) -> list:
                     "scores": scores}, indent=2, default=str))
 
     rep = summarise(arm, scores)
-    print(f"    -> solve {rep.solve_rate}%  false-success {rep.false_success_rate}%  "
+    print(f"    -> solve {rep.solve_rate}% (all {rep.n})  false-success {rep.false_success_rate}% (all {rep.n})  "
           f"${rep.usd_total:.2f}")
     return scores
 

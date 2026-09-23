@@ -29,8 +29,8 @@ LABELS = {"model_said_done": "model said done", "budget_exhausted": "budget exha
           "hard_blocker": "hard blocker", "verified_success": "verified success"}
 
 ARM_LABELS = {"naive": "naive", "engineered": "engineered",
-              "answer_free": "answer-free only", "no_invariants": "no rung 5",
-              "no_feedback": "raw error text",
+              "answer_free": "answer-free\ninvariants", "no_invariants": "no invariants",
+              "no_feedback": "no error\nclassification",
               "no_progress_check": "no progress check",
               "no_blocker_check": "no blocker check"}
 
@@ -67,8 +67,8 @@ def spread(vals: list[float], dp: int = 1) -> str:
 
 def main() -> None:
     byarm = load_all()
-    order = [a for a in ["naive", "no_invariants", "answer_free", "engineered",
-                         "no_feedback", "no_progress_check", "no_blocker_check"]
+    order = [a for a in ["naive", "no_invariants", "answer_free", "no_feedback",
+                         "engineered", "no_progress_check", "no_blocker_check"]
              if a in byarm]
     reps = {a: [summarise(a, t) for t in byarm[a]] for a in order}
     ntrials = {a: len(byarm[a]) for a in order}
@@ -191,7 +191,7 @@ def chart_ablation(reps, order) -> None:
 
     ax.set_xticks(list(x))
     ax.set_xticklabels(labels, fontsize=11)
-    ax.set_ylabel("percent of tasks", fontsize=12)
+    ax.set_ylabel("percent of all 34 tasks", fontsize=12)
     ax.set_ylim(0, 105)
     ax.set_title("What each part of the loop is worth", fontsize=16, pad=14, loc="left")
     ax.legend(frameon=False, fontsize=12)

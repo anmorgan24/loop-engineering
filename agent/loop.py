@@ -88,6 +88,9 @@ def run(question: str, question_id: str = "", invariants: Optional[Invariants] =
     started = time.monotonic()
 
     messages = [{"role": "user", "content": question}]
+    # Transient failures deliberately do not charge the iteration budget, so
+    # they need their own bound or a sustained outage is an infinite loop.
+    transient_streak, max_transient = 0, 8
 
     while True:
         # The only thing that can end this loop.
@@ -98,15 +101,21 @@ def run(question: str, question_id: str = "", invariants: Optional[Invariants] =
         # The one non-deterministic step.
         try:
             turn = _model_step(messages, TOOL_SPECS)
+        except (KeyboardInterrupt, SystemExit):
+            raise
         except BaseException as e:  # noqa: BLE001
             c = classify_exception(e)
             if c.kind is ErrorClass.TRANSIENT:
+                transient_streak += 1
+                if transient_streak > max_transient:
+                    raise
                 time.sleep(c.retry_after_s)
                 continue  # no iteration charged, no progress charged
             if c.kind is ErrorClass.HARD_BLOCKER:
                 state.blocked = c
                 continue
             raise
+        transient_streak = 0
 
         budget.charge(tokens=turn.tokens, usd=turn.usd, iteration=True)
         messages.append({"role": "assistant", "content": turn.raw_content})

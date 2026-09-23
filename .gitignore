@@ -1,6 +1,10 @@
+.venv/
 __pycache__/
 *.pyc
-data/*.duckdb
-out/*.json
-out/*.png
 .env
+out/
+data/*.duckdb
+data/*.wal
+takes/
+*.cast
+.DS_Store
