@@ -137,39 +137,50 @@ def _mean_exits(rs, k):
 
 
 def chart_exits(reps, order) -> None:
+    """One bar per arm, segmented by exit reason.
+
+    Not a grouped chart. Grouping implies the arms share categories, and they
+    do not: naive only ever exits one way, so every group had one real bar and
+    one empty slot sitting off-centre from its tick.
+    """
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
     pair = [a for a in ("naive", "engineered") if a in order] or order[:2]
-    keys = [k for k in EXIT_ORDER if any(_mean_exits(reps[a], k) for a in pair)]
-    x = range(len(keys))
-    w = 0.38
-    colors = {"naive": "#B0B7C3", "engineered": "#2F6FEB"}
+    totals = {a: {k: sum(r.exit_reasons.get(k, 0) for r in reps[a])
+                  for k in EXIT_ORDER} for a in pair}
+    keys = [k for k in EXIT_ORDER if any(totals[a][k] for a in pair)]
+    colors = {"model_said_done": "#9AA1A8", "verified_success": "#3AA08F",
+              "hard_blocker": "#D98518", "no_progress": "#7A8699",
+              "budget_exhausted": "#C4443C", "escalate": "#8A6FB0"}
 
-    fig, ax = plt.subplots(figsize=(11, 5.2))
-    for i, a in enumerate(pair):
-        vals = [_mean_exits(reps[a], k) for k in keys]
-        off = (i - (len(pair) - 1) / 2) * w
-        ax.bar([j + off for j in x], vals, w, label=ARM_LABELS.get(a, a),
-               color=colors.get(a, "#7A8699"))
-        for j, v in enumerate(vals):
+    arms = [ARM_LABELS.get(a, a) for a in pair]
+    fig, ax = plt.subplots(figsize=(13.5, 4.2))
+    left = [0] * len(pair)
+    for k in keys:
+        vals = [totals[a][k] for a in pair]
+        ax.barh(arms, vals, left=left, height=0.52,
+                color=colors.get(k, "#7A8699"),
+                label=LABELS.get(k, k.replace("_", " ")))
+        for i, v in enumerate(vals):
             if v:
-                ax.text(j + off, v + 0.15, f"{v:.0f}", ha="center", fontsize=11)
+                ax.text(left[i] + v / 2, i, str(v), ha="center", va="center",
+                        fontsize=13, color="#ffffff", fontweight="bold")
+        left = [l + v for l, v in zip(left, vals)]
 
-    ax.set_xticks(list(x))
-    ax.set_xticklabels([LABELS[k] for k in keys], fontsize=12)
-    ax.set_ylabel("tasks", fontsize=12)
-    ax.set_title("Why the loop stopped", fontsize=16, pad=14, loc="left")
-    ax.legend(frameon=False, fontsize=12)
-    ax.spines[["top", "right"]].set_visible(False)
-    ax.grid(axis="y", alpha=0.25)
-    ax.set_axisbelow(True)
+    n = max(left) or 1
+    ax.set_xlim(0, n)
+    ax.set_xlabel("runs (%d per arm)" % n, fontsize=12)
+    ax.tick_params(axis="y", labelsize=15, length=0, pad=10)
+    ax.invert_yaxis()
+    for side in ("top", "right", "left"):
+        ax.spines[side].set_visible(False)
+    ax.set_title("Why the loop stopped", fontsize=17, loc="left", pad=16)
+    ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.22),
+              ncol=len(keys), frameon=False, fontsize=12)
     fig.tight_layout()
-    OUT.mkdir(exist_ok=True)
     fig.savefig(OUT / "exit_reasons.png", dpi=200)
-    print(f"\n  wrote {OUT / 'exit_reasons.png'}")
-
 
 def chart_ablation(reps, order) -> None:
     import matplotlib
