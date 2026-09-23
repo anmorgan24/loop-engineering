@@ -193,21 +193,34 @@ def chart_ablation(reps, order) -> None:
     x = range(len(order))
     w = 0.38
 
-    fig, ax = plt.subplots(figsize=(11, 5.2))
-    ax.bar([i - w / 2 for i in x], solve, w, label="solve rate", color="#2F6FEB")
-    ax.bar([i + w / 2 for i in x], false, w, label="false success rate", color="#E4572E")
+    # Teal is the same "a check passed" green as the exit reason chart. False
+    # success gets its own red rather than that chart's amber: amber there
+    # means hard_blocker, which is the loop behaving correctly, and the same
+    # colour meaning the opposite thing two slides later is worse than two
+    # unmatched palettes.
+    fig, ax = plt.subplots(figsize=(13.5, 5.6))
+    ax.bar([i - w / 2 for i in x], solve, w, label="solve rate", color="#3AA08F")
+    ax.bar([i + w / 2 for i in x], false, w, label="false success rate", color="#C4443C")
     for i, (s, f) in enumerate(zip(solve, false)):
-        ax.text(i - w / 2, s + 1, f"{s:.0f}", ha="center", fontsize=11)
-        ax.text(i + w / 2, f + 1, f"{f:.0f}", ha="center", fontsize=11)
+        ax.text(i - w / 2, s + 1.5, f"{s:.0f}", ha="center", fontsize=13,
+                color="#16191d", fontweight="bold")
+        ax.text(i + w / 2, f + 1.5, f"{f:.0f}", ha="center", fontsize=13,
+                color="#16191d", fontweight="bold")
 
     ax.set_xticks(list(x))
-    ax.set_xticklabels(labels, fontsize=11)
+    ax.set_xticklabels(labels, fontsize=13)
     ax.set_ylabel("percent of all 34 tasks", fontsize=12)
     ax.set_ylim(0, 105)
-    ax.set_title("What each part of the loop is worth", fontsize=16, pad=14, loc="left")
-    ax.legend(frameon=False, fontsize=12)
+    ax.tick_params(axis="x", length=0, pad=10)
+    ax.tick_params(axis="y", labelsize=11, colors="#5a6167")
+    ax.set_title("What each part of the loop is worth", fontsize=17, pad=18, loc="left")
+    handles, lab = ax.get_legend_handles_labels()
+    ax.legend(handles[::-1], lab[::-1], loc="upper center",
+              bbox_to_anchor=(0.5, -0.16), ncol=2, frameon=False, fontsize=13)
     ax.spines[["top", "right"]].set_visible(False)
-    ax.grid(axis="y", alpha=0.25)
+    ax.spines["bottom"].set_color("#cfd3d7")
+    ax.spines["left"].set_color("#cfd3d7")
+    ax.grid(axis="y", alpha=0.18)
     ax.set_axisbelow(True)
     fig.tight_layout()
     fig.savefig(OUT / "ablation.png", dpi=200)
