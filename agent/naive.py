@@ -144,6 +144,21 @@ def run(question: str, question_id: str = "", invariants: Optional[Invariants] =
 
 
 def _peek(conn, sql):
-    from agent.verify import execute_bounded
-    parse(sql)
+    """Record what the agent's submitted query returns, for the trace only.
+
+    Enforces the same table denials as run_query. Without that check this
+    reaches the database on an unrestricted connection, so a query against a
+    denied table records rows the agent was never able to see, and the trace
+    reads as though it got in. Grading never uses this field: metrics.py
+    re-executes answer_sql itself.
+    """
+    from agent.tools import DENIED_TABLES, PermissionDenied
+    from agent.verify import execute_bounded, referenced_tables
+
+    tree = parse(sql)
+    denied = referenced_tables(tree) & DENIED_TABLES
+    if denied:
+        raise PermissionDenied(
+            f"read access to {', '.join(sorted(denied))} is not granted to this agent"
+        )
     return execute_bounded(conn, sql, timeout_s=10, max_rows=200)
