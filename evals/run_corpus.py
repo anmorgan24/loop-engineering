@@ -23,7 +23,12 @@ import pathlib
 import sys
 import time
 
-from agent import loop as engineered_loop
+# Before any agent import. The Opik SDK reads OPIK_PROJECT_NAME when it is
+# first imported, and `from agent import loop` pulls it in transitively, so
+# setting the variable further down has no effect on where traces land.
+os.environ.setdefault("OPIK_PROJECT_NAME", "loop-engineering")
+
+from agent import loop as engineered_loop  # noqa: E402
 from agent import naive as naive_loop
 from agent.config import ARMS, CORE_ARMS
 from agent.db import connect
@@ -52,9 +57,6 @@ def run_arm(arm: str, trial: int, limit=None, verbose: bool = True) -> list:
     questions = QUESTIONS[:limit] if limit else QUESTIONS
     conn = connect()
     scores = []
-
-    if os.environ.get("OPIK_API_KEY"):
-        os.environ["OPIK_PROJECT_NAME"] = f"sql-loop-{arm}"
 
     for i, q in enumerate(questions, 1):
         t0 = time.monotonic()

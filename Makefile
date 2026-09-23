@@ -1,4 +1,9 @@
-.PHONY: seed audit smoke cost core ladder pair report clean
+.PHONY: help seed audit smoke cost core ladder pair report clean
+
+.DEFAULT_GOAL := help
+
+help:     ## list targets
+	@grep -hE '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-8s %s\n", $$1, $$2}'
 
 seed:     ## build the database
 	python -m agent.db
