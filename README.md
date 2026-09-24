@@ -241,7 +241,9 @@ tasks: 30 with an answer, 4 that grade a behaviour.
   again.
 - **unanswerable**. The data does not exist anywhere in the schema, and nothing
   is denied, so the agent has to work it out from the catalogue. Even the full
-  loop is unreliable here. That is a result, not a defect.
+  loop is unreliable here. Across the four blocked and unanswerable tasks, three
+  trials each, the engineered loop stopped on ten of twelve runs. The naive loop
+  submitted an answer on all twelve.
 
 `make report` breaks out all three. The headline solve rate covers all 34
 tasks, so correctly refusing an unanswerable question counts as solved.
@@ -258,5 +260,8 @@ tasks, so correctly refusing an unanswerable question counts as solved.
   that survives contact with production.
 - Prices in `agent/llm.py` were checked in September 2026. Re-check them before
   putting a cost figure anywhere.
+- The engineered loop has the same failure it is built to catch, just less often.
+  Two runs on one unanswerable question exited `verified_success` with a wrong
+  answer. The ladder passed a query that answered a question with no answer.
 - The invariants are the interesting part of this repo and every one of them is
   hand written. That is the work, and there is no way around it.
