@@ -54,9 +54,18 @@ ARMS: dict[str, LoopConfig] = {
     "answer_free": replace(ENGINEERED, label="answer_free", use_calibrated=False),
 }
 
-# What to run when you want the ablation but not all of it. These three carry
-# the talk's three claims.
-CORE_ARMS = ["engineered", "answer_free", "no_invariants", "no_feedback"]
+# Every arm. Each knockout is only meaningful next to `engineered`, and leaving
+# two of them out meant two of the five design choices were never measured in
+# isolation. Reruns skip result files that already exist, so adding arms here
+# only runs the new ones.
+CORE_ARMS = ["engineered", "answer_free", "no_invariants", "no_feedback",
+             "no_progress_check", "no_blocker_check"]
+
+# Single-feature knockouts, each compared against `engineered` alone. These
+# are not a sequence: each one removes a different thing from the full loop,
+# so ordering them in one row of a chart implies a cumulative build that
+# never happened.
+KNOCKOUT_ARMS = ["no_feedback", "no_progress_check", "no_blocker_check"]
 
 # The verification ladder as three points rather than two: no rung 5 at all,
 # rung 5 with only what you could write blind, rung 5 with calibration.

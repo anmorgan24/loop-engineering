@@ -63,28 +63,58 @@ see, because the wrong answer is a revenue figure somebody recognises.
 
 ## What the runs showed
 
-Five arms, three trials each, 34 tasks. 510 runs.
+Seven arms, three trials each, 34 tasks. 714 runs. Every run ends in one of
+three outcomes, which sum to 100%:
 
-| arm | solve | false success |
-|---|---|---|
-| naive | 77% | 23% |
-| no invariants | 85% | 15% |
-| answer-free invariants | 88% | 12% |
-| no error classification | 88% | 9% |
-| engineered | 93% | 7% |
+- **solved**: the right answer, or on a blocked or unanswerable task, a stop
+  that did not claim success
+- **false success**: the loop reported done and was wrong. This is the failure
+  you cannot see in production, and the column to read
+- **stopped unsolved**: the loop gave up without claiming anything
 
-False success is the column to read. It counts the runs where the loop reported
-done and was wrong, which is the failure you cannot see in production.
+Each arm other than `naive` is the engineered loop with one thing removed, so
+the arms answer three different questions. They are reported separately
+because putting them in one ordered row suggests a cumulative build that never
+happened.
 
-Invariants move that number more than anything else. Read the middle rows
-carefully, though. Strip invariants entirely and the loop solves 85%. Add back
-only the ones you could write without knowing the answer and it reaches 88%.
-Add the calibrated ones, written with the answer key open, and it reaches 93%.
-More than half of what invariants were worth here came from knowledge you would
+**1. Naive vs engineered.** Every design choice at once. This shows the size of
+the gap, not which part of the loop produced it.
+
+| arm        | solved | false success | stopped unsolved |
+| ---------- | ------ | ------------- | ---------------- |
+| naive      | 77%    | 23%           | 0%               |
+| engineered | 93%    | 7%            | 0%               |
+
+**2. The verification ladder.** The one place the arms form a real sequence:
+each row adds one thing to the row above.
+
+| arm                      | solved | false success |
+| ------------------------ | ------ | ------------- |
+| no invariants (rung 4)   | 85%    | 15%           |
+| answer-free invariants   | 88%    | 12%           |
+| + calibrated invariants  | 93%    | 7%            |
+
+Adding invariants took solve from 85% to 93%. Three of those eight points came
+from invariants you could write without knowing the answer. Five came from
+calibrated bands written with the answer key open, which is knowledge you would
 not have at runtime. See the section on that below.
 
-Across all 510 runs, not one exhausted its iteration budget. The other exit
-conditions caught everything first.
+**3. Single knockouts.** Each row removes one feature from the engineered loop.
+Compare each row to `engineered`, not to the others.
+
+| removed                   | solved | false success | stopped unsolved |
+| ------------------------- | ------ | ------------- | ---------------- |
+| error classification      | 88%    | 9%            | 3%               |
+| no-progress detection     | TODO   | TODO          | TODO             |
+| blocker detection         | TODO   | TODO          | TODO             |
+| nothing (`engineered`)    | 93%    | 7%            | 0%               |
+
+The false success gap between `no_feedback` and `engineered` is two points,
+which three trials cannot separate from noise. The solve gap is five.
+
+Across the five arms in the original run, not one run exhausted its iteration
+budget. Every naive run ended because the model said it was done, including
+the 23% that were wrong. The failure here was stopping, not spinning.
 
 ## Setup
 
@@ -136,16 +166,17 @@ make audit        # check the questions before trusting any number
 make smoke        # every exit reason, scripted model, no key needed
 make cost         # 3 tasks, one arm, to see what spending looks like
 make pair         # naive vs engineered, 3 trials
-make core         # naive, engineered and 3 ablations, 3 trials each
-make report       # the table, out/exit_reasons.png, out/ablation.png
+make core         # naive, engineered and 5 knockouts, 3 trials each
+make report       # three tables, out/exit_reasons.png, out/ladder.png, out/knockouts.png
 ```
 
 `make smoke` swaps the model for a scripted stand-in and walks the loop through
 every exit reason. No network, no key, about five seconds. It also works as a
 live demo when the venue wifi does not.
 
-`make core` is 510 model calls and takes roughly 45 minutes. Run `make cost`
-first so the bill is not a surprise.
+`make core` is 714 runs and takes roughly an hour. It skips any arm and trial
+whose result file already exists, so rerunning it after adding an arm only runs
+the new one. Run `make cost` first so the bill is not a surprise.
 
 Results are written to `out/<arm>__t<n>.json`, one file per arm per trial. A
 crashed trial costs you that trial and nothing else, and a rerun skips files
@@ -196,12 +227,13 @@ revenue. A sane ceiling on a customer count. These are fine in production, where
 last month's number exists to calibrate against. They are not fine when you
 derive them from the answer key of the suite you are about to score.
 
-The `answer_free` arm drops the calibrated set, which is why it appears in the
-table above. The gap between 88% and 93% is what those bands are worth, and
+The `answer_free` arm drops the calibrated set, which is why it appears on the
+verification ladder above. The gap between 88% and 93% is what those bands are
+worth, and
 reporting it is the honest version of a verification claim. `make report` prints
 which questions still lean on one.
 
-## Why evals/ never imports agent/
+## Why agent/ never imports evals/
 
 Verification at runtime stops at rung 5. Comparing against a gold answer is
 rung 6, and it lives in `evals/`, because at runtime there is no gold answer to
@@ -255,6 +287,9 @@ tasks, so correctly refusing an unanswerable question counts as solved.
   text-to-SQL.
 - Three trials per arm keeps an eight-point gap clear of the noise. A two-point
   gap needs more. Raise `--trials` if you want tighter numbers.
+- The iteration budget is 12 and the tasks are short. That no run exhausted it
+  says the other exits fired first on these tasks, not that long-horizon loops
+  cannot run away.
 - Part of the engineered arm's margin comes from calibrated invariants written
   with the answer key in hand. Quote the `answer_free` number if you want one
   that survives contact with production.

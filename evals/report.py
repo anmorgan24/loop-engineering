@@ -6,8 +6,18 @@ Reads out/<arm>__t<n>.json. Reports the mean across trials with the spread, so
 a gap that is inside the noise is visible as such rather than presented as a
 result.
 
-Writes out/exit_reasons.png (the before/after slide) and, when more than one
-engineered arm is present, out/ablation.png.
+Three comparisons, kept apart because they answer different questions:
+
+    naive vs engineered    everything at once. Shows the size of the gap, not
+                           which part of the loop produced it.
+    verification ladder    no invariants -> answer-free -> calibrated. The one
+                           place the arms form a real sequence, each adding
+                           one thing to the one before.
+    knockouts              each arm removes one feature from `engineered`.
+                           Read each against `engineered` only, never against
+                           each other.
+
+Writes out/exit_reasons.png, out/ladder.png and out/knockouts.png.
 """
 
 from __future__ import annotations
@@ -17,7 +27,9 @@ import pathlib
 import statistics
 from collections import defaultdict
 
-from evals.metrics import summarise
+from agent.config import KNOCKOUT_ARMS, VERIFICATION_ARMS
+from evals.metrics import (BEHAVIOUR_TIERS, behaviour_correct,
+                           outcome_class, summarise)
 
 OUT = pathlib.Path(__file__).resolve().parent.parent / "out"
 
@@ -42,7 +54,7 @@ def load_all() -> dict:
         if "__limit" in p.name:
             continue
         d = json.loads(p.read_text())
-        byarm[d["arm"]].append(d["scores"])
+        byarm[d["arm"]].append([_regrade(s) for s in d["scores"]])
     if not byarm:
         raise SystemExit(
             "no results in out/. Run: python -m evals.run_corpus --arm naive engineered")
@@ -58,6 +70,20 @@ def load_all() -> dict:
     return dict(byarm)
 
 
+def _regrade(s: dict) -> dict:
+    """Re-apply the current grading rule to the behaviour tiers.
+
+    Those tiers are graded from the exit reason alone, which is stored, so a
+    change to the rule can be applied to old result files without a rerun.
+    Keeps files written before and after a rule change comparable.
+    """
+    if s.get("tier") in BEHAVIOUR_TIERS:
+        s = dict(s)
+        s["correct"] = behaviour_correct(s["tier"], s["exit_reason"])
+        s["false_success"] = outcome_class(s["correct"], s["exit_reason"]) == "false_success"
+    return s
+
+
 def spread(vals: list[float], dp: int = 1) -> str:
     if len(vals) < 2:
         return f"{vals[0]:.{dp}f}"
@@ -65,58 +91,75 @@ def spread(vals: list[float], dp: int = 1) -> str:
             f"+/-{(max(vals) - min(vals)) / 2:.{dp}f}")
 
 
-def main() -> None:
-    byarm = load_all()
-    order = [a for a in ["naive", "no_invariants", "answer_free", "no_feedback",
-                         "engineered", "no_progress_check", "no_blocker_check"]
-             if a in byarm]
-    reps = {a: [summarise(a, t) for t in byarm[a]] for a in order}
-    ntrials = {a: len(byarm[a]) for a in order}
-
-    w = 17
-    head = "".join(f"{ARM_LABELS.get(a, a):>{w}}" for a in order)
-    print("\n" + "=" * (28 + w * len(order)))
+def table(title: str, arms: list, reps: dict, ntrials: dict, note: str = "") -> None:
+    arms = [a for a in arms if a in reps]
+    if len(arms) < 2:
+        print(f"\n  {title}: needs {', '.join(arms) or 'these arms'} plus at least one "
+              "more. Skipped.")
+        return
+    names = [ARM_LABELS.get(a, a).replace("\n", " ") for a in arms]
+    w = max(17, max(len(n) for n in names) + 2)
+    head = "".join(f"{n:>{w}}" for n in names)
+    rule = "=" * (28 + w * len(arms))
+    print(f"\n  {title}")
+    if note:
+        print(f"  {note}")
+    print(rule)
     print(f"  {'':<26}{head}")
-    print(f"  {'trials':<26}" + "".join(f"{ntrials[a]:>{w}}" for a in order))
-    print("=" * (28 + w * len(order)))
+    print(f"  {'trials':<26}" + "".join(f"{ntrials[a]:>{w}}" for a in arms))
+    print(rule)
 
     def line(label, fn, suffix="", dp=1, prefix=""):
         cells = "".join(
             f"{prefix + spread([fn(r) for r in reps[a]], dp) + suffix:>{w}}"
-            for a in order)
+            for a in arms)
         print(f"  {label:<26}{cells}")
 
-    line("solve rate (answerable)", lambda r: r.answerable_solve_rate, "%")
+    line("solve (all tiers)", lambda r: r.solve_rate, "%")
+    line("false success (all)", lambda r: r.false_success_rate, "%")
+    line("stopped unsolved (all)", lambda r: r.stopped_unsolved_rate, "%")
+    line("solve (answerable)", lambda r: r.answerable_solve_rate, "%")
     line("false success (answerable)", lambda r: r.answerable_false_success, "%")
-    line("solve rate (all tiers)", lambda r: r.solve_rate, "%")
     line("iters to solve p50", lambda r: r.iters_p50)
     line("iters to solve p95", lambda r: r.iters_p95)
     line("cost per solved", lambda r: r.usd_per_solved, dp=3, prefix="$")
     line("cost on failed runs", lambda r: r.usd_wasted, dp=3, prefix="$")
     line("redundant action rate", lambda r: r.redundant_action_rate, "%")
-    print("=" * (28 + w * len(order)))
+    print(rule)
 
-    print("\n  exit reasons (mean per trial)")
+    print("  exit reasons (mean per trial)")
     for k in EXIT_ORDER:
         vals = {a: statistics.mean([r.exit_reasons.get(k, 0) for r in reps[a]])
-                for a in order}
+                for a in arms}
         if any(vals.values()):
-            print(f"  {LABELS[k]:<26}" + "".join(f"{vals[a]:>{w}.1f}" for a in order))
+            print(f"  {LABELS[k]:<26}" + "".join(f"{vals[a]:>{w}.1f}" for a in arms))
 
-    n_ans = reps[order[0]][0].n_answerable
-    print(f"\n  answerable questions: {n_ans}. The two tiers below grade whether "
-          "the loop\n  noticed it could not answer, which is a behaviour, not an "
-          "answer, so they\n  are reported separately rather than folded into the "
-          "rate above.")
     def tier_line(label, attr):
         cells = "".join(
-            (" ".join(getattr(r, attr) for r in reps[a])).rjust(w) for a in order)
+            (" ".join(getattr(r, attr) for r in reps[a])).rjust(w) for a in arms)
         print(f"  {label:<26}{cells}")
 
-    print("\n  blocked (permission denied), by trial")
-    tier_line("", "blocked_handled")
-    print("  unanswerable (no such data), by trial")
-    tier_line("", "unanswerable_detected")
+    tier_line("blocked: hard_blocker", "blocked_handled")
+    tier_line("unanswerable: noticed", "unanswerable_detected")
+
+
+def main() -> None:
+    byarm = load_all()
+    reps = {a: [summarise(a, t) for t in trials] for a, trials in byarm.items()}
+    ntrials = {a: len(t) for a, t in byarm.items()}
+
+    print("\n  solve + false success + stopped unsolved = 100% of runs.")
+    print("  Blocked and unanswerable tasks count as solved when the loop stops on")
+    print("  hard_blocker, no_progress or escalate. Budget exhaustion does not count:")
+    print("  that is the fuse noticing, not the loop.")
+
+    table("1. naive vs engineered", ["naive", "engineered"], reps, ntrials,
+          "Every design choice at once. The size of the gap, not its source.")
+    table("2. verification ladder", VERIFICATION_ARMS, reps, ntrials,
+          "Each column adds one thing to the column before it.")
+    table("3. single knockouts", KNOCKOUT_ARMS + ["engineered"], reps, ntrials,
+          "Each column removes one feature from engineered. Compare each to "
+          "engineered only.")
 
     from evals.questions import ANSWERABLE
     cal = [q.id for q in ANSWERABLE if q.invariants.value_band is not None]
@@ -126,9 +169,13 @@ def main() -> None:
           "arm\n  drops them, and the gap is the part of the score that needed "
           "prior knowledge.")
 
-    chart_exits(reps, order)
-    if len([a for a in order if a not in ("naive",)]) > 1:
-        chart_ablation(reps, order)
+    chart_exits(reps, list(reps))
+    chart_rates(reps, [a for a in VERIFICATION_ARMS if a in reps], "ladder.png",
+                "The verification ladder: each bar adds one thing to the one before")
+    chart_rates(reps, [a for a in KNOCKOUT_ARMS if a in reps] + (
+                ["engineered"] if "engineered" in reps else []), "knockouts.png",
+                "Single knockouts: each bar removes one feature from engineered",
+                reference="engineered")
     print()
 
 
@@ -182,15 +229,23 @@ def chart_exits(reps, order) -> None:
     fig.tight_layout()
     fig.savefig(OUT / "exit_reasons.png", dpi=200)
 
-def chart_ablation(reps, order) -> None:
+def chart_rates(reps, arms, filename, title, reference=None) -> None:
+    """Solve and false success per arm.
+
+    Used for the ladder, where left to right is a real sequence, and for the
+    knockouts, where it is not. For the knockouts the reference arm is drawn
+    last and set off by a divider, so no one reads the bars as a progression.
+    """
+    if len(arms) < 2:
+        return
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
-    labels = [ARM_LABELS.get(a, a) for a in order]
-    solve = [statistics.mean([r.solve_rate for r in reps[a]]) for a in order]
-    false = [statistics.mean([r.false_success_rate for r in reps[a]]) for a in order]
-    x = range(len(order))
+    labels = [ARM_LABELS.get(a, a) for a in arms]
+    solve = [statistics.mean([r.solve_rate for r in reps[a]]) for a in arms]
+    false = [statistics.mean([r.false_success_rate for r in reps[a]]) for a in arms]
+    x = range(len(arms))
     w = 0.38
 
     # Teal is the same "a check passed" green as the exit reason chart. False
@@ -201,11 +256,13 @@ def chart_ablation(reps, order) -> None:
     fig, ax = plt.subplots(figsize=(13.5, 5.6))
     ax.bar([i - w / 2 for i in x], solve, w, label="solve rate", color="#3AA08F")
     ax.bar([i + w / 2 for i in x], false, w, label="false success rate", color="#C4443C")
-    for i, (s, f) in enumerate(zip(solve, false)):
-        ax.text(i - w / 2, s + 1.5, f"{s:.0f}", ha="center", fontsize=13,
+    for i, (s_, f) in enumerate(zip(solve, false)):
+        ax.text(i - w / 2, s_ + 1.5, f"{s_:.0f}", ha="center", fontsize=13,
                 color="#16191d", fontweight="bold")
         ax.text(i + w / 2, f + 1.5, f"{f:.0f}", ha="center", fontsize=13,
                 color="#16191d", fontweight="bold")
+    if reference in arms:
+        ax.axvline(arms.index(reference) - 0.5, color="#9AA1A8", ls="--", lw=1)
 
     ax.set_xticks(list(x))
     ax.set_xticklabels(labels, fontsize=13)
@@ -213,7 +270,7 @@ def chart_ablation(reps, order) -> None:
     ax.set_ylim(0, 105)
     ax.tick_params(axis="x", length=0, pad=10)
     ax.tick_params(axis="y", labelsize=11, colors="#5a6167")
-    ax.set_title("What each part of the loop is worth", fontsize=17, pad=18, loc="left")
+    ax.set_title(title, fontsize=16, pad=18, loc="left")
     handles, lab = ax.get_legend_handles_labels()
     ax.legend(handles[::-1], lab[::-1], loc="upper center",
               bbox_to_anchor=(0.5, -0.16), ncol=2, frameon=False, fontsize=13)
@@ -223,8 +280,8 @@ def chart_ablation(reps, order) -> None:
     ax.grid(axis="y", alpha=0.18)
     ax.set_axisbelow(True)
     fig.tight_layout()
-    fig.savefig(OUT / "ablation.png", dpi=200)
-    print(f"  wrote {OUT / 'ablation.png'}")
+    fig.savefig(OUT / filename, dpi=200)
+    print(f"  wrote {OUT / filename}")
 
 
 if __name__ == "__main__":

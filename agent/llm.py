@@ -103,6 +103,12 @@ def propose_action(messages: list[dict], tools: list[dict],
 # The repo runs with or without Opik configured. Without it, these are no-ops
 # and you still get exit reasons on stdout; with it, you get the span tree.
 
+# Set here, immediately before the import, because the SDK reads the project
+# name once at import time. Setting it in each entry point missed cold_open.py,
+# which sent its traces to the Default Project. setdefault, so an explicit
+# OPIK_PROJECT_NAME in the environment still wins.
+os.environ.setdefault("OPIK_PROJECT_NAME", "loop-engineering")
+
 try:
     import opik
 

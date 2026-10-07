@@ -17,7 +17,7 @@ smoke:    ## full loop + ablation test, no API key needed
 cost:     ## 3 tasks, one arm, to measure spend (writes out/engineered__limit3.json, ignored by report)
 	python -m evals.run_corpus --arm engineered --limit 3
 
-core:     ## naive + engineered + 3 ablations, 3 trials each
+core:     ## naive + engineered + 5 ablations, 3 trials each (skips arms already run)
 	python -m evals.run_corpus --arm core --trials 3
 
 ladder:   ## the verification ladder: none vs answer-free vs calibrated
@@ -26,7 +26,7 @@ ladder:   ## the verification ladder: none vs answer-free vs calibrated
 pair:     ## just naive vs engineered, 3 trials
 	python -m evals.run_corpus --arm naive engineered --trials 3
 
-report:   ## table + out/exit_reasons.png + out/ablation.png
+report:   ## tables + out/exit_reasons.png + out/ladder.png + out/knockouts.png
 	python -m evals.report
 
 clean:

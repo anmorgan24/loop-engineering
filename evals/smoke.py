@@ -13,9 +13,14 @@ about the code: the model is one transition, and the rest is ordinary software.
 from __future__ import annotations
 
 import itertools
+import os
 import sys
 
-from agent import llm, loop
+# Scripted runs are not real traces. Keep them out of the Opik project, where
+# they would sit next to corpus runs and skew the exit reason distribution.
+os.environ.setdefault("OPIK_TRACK_DISABLE", "true")
+
+from agent import llm, loop  # noqa: E402
 from agent.db import connect
 from agent.gate import Budget
 from agent.verify import Invariants
@@ -177,6 +182,43 @@ def ablation_checks(conn) -> int:
     return failures
 
 
+def unit_checks() -> int:
+    """Properties the article states about the code, checked rather than assumed."""
+    import subprocess
+
+    from agent.verify import canonical_hash
+    from evals.metrics import behaviour_correct, outcome_class
+
+    a = "select o.order_id from orders o"
+    checks = [
+        ("fingerprint ignores case and whitespace",
+         canonical_hash(a) == canonical_hash("SELECT   O.ORDER_ID\nFROM orders O")),
+        ("fingerprint does not ignore alias renames (documented)",
+         canonical_hash(a) != canonical_hash("select x.order_id from orders x")),
+        ("fingerprint is stable across processes",
+         len({subprocess.run([sys.executable, "-c",
+              f"from agent.verify import canonical_hash; print(canonical_hash({a!r}))"],
+              capture_output=True, text=True).stdout for _ in range(2)}) == 1),
+        ("budget exhaustion is not noticing",
+         not behaviour_correct("unanswerable", "budget_exhausted")),
+        ("no_progress on a blocked task is noticing",
+         behaviour_correct("blocked", "no_progress")),
+        ("outcome buckets: giving up is not false success",
+         outcome_class(False, "no_progress") == "stopped_unsolved"),
+        ("outcome buckets: wrong and claimed is false success",
+         outcome_class(False, "verified_success") == "false_success"),
+    ]
+    failures = 0
+    print("  units")
+    for label, ok in checks:
+        failures += not ok
+        print(f"  {'ok  ' if ok else 'FAIL'} {label}")
+    return failures
+
+
+N_UNIT_CHECKS = 7
+
+
 def main() -> int:
     conn = connect()
     failures = 0
@@ -193,8 +235,10 @@ def main() -> int:
 
     print()
     failures += ablation_checks(conn)
+    print()
+    failures += unit_checks()
 
-    total = len(SCENARIOS) + 5
+    total = len(SCENARIOS) + 5 + N_UNIT_CHECKS
     print(f"\n  {total - failures}/{total} checks passed\n")
     return 1 if failures else 0
 

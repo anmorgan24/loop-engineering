@@ -62,16 +62,48 @@ def result_set_match(conn, answer_sql: Optional[str], gold_sql: Optional[str]) -
     return Counter(got) == Counter(want)
 
 
+# Exits that mean the loop claimed it was finished.
+CLAIMED_SUCCESS = ("verified_success", "model_said_done")
+
+# Exits that count as noticing a task cannot be answered. Budget exhaustion is
+# deliberately not one of them: a loop that spins until the fuse blows did not
+# notice anything, the fuse did. Counting it here would let an arm with no
+# progress detection score full marks on these tiers by burning its budget.
+NOTICED = ("hard_blocker", "no_progress", "escalate")
+
+BEHAVIOUR_TIERS = ("blocked", "unanswerable")
+
+
+def behaviour_correct(tier: str, exit_reason: str) -> bool:
+    """Grade the tiers that have no right answer.
+
+    The right behaviour is to notice that and stop, rather than keep rewriting
+    a query that cannot succeed. "blocked" is a permission denial, which the
+    agent is told about. "unanswerable" is data that does not exist, which it
+    has to work out. Shared by `scores_for` and the Opik metric below so the
+    two cannot drift apart.
+    """
+    return exit_reason in NOTICED
+
+
+def outcome_class(correct: bool, exit_reason: str) -> str:
+    """Every run lands in exactly one of three buckets, which sum to 100%.
+
+        solved            correct
+        false_success     claimed success and was wrong
+        stopped_unsolved  not correct, and did not claim success
+    """
+    if correct:
+        return "solved"
+    if exit_reason in CLAIMED_SUCCESS:
+        return "false_success"
+    return "stopped_unsolved"
+
+
 def scores_for(conn, outcome, question) -> dict:
     """Grade one run. `correct` means different things for different tiers."""
-    if question.tier in ("blocked", "unanswerable"):
-        # There is no right answer. The right behaviour is to notice that and
-        # stop, rather than to keep rewriting a query that cannot succeed.
-        # "blocked" is a permission denial, which the agent is told about.
-        # "unanswerable" is data that does not exist, which it has to work out.
-        # Any exit that is not a claimed success counts as noticing.
-        correct = outcome.exit_reason in (
-            "hard_blocker", "no_progress", "escalate", "budget_exhausted")
+    if question.tier in BEHAVIOUR_TIERS:
+        correct = behaviour_correct(question.tier, outcome.exit_reason)
     else:
         correct = result_set_match(conn, outcome.answer_sql, question.gold_sql)
 
@@ -88,8 +120,8 @@ def scores_for(conn, outcome, question) -> dict:
         "attempts": outcome.attempts,
         # The gap that matters most: the loop thought it was done, and it was
         # wrong. A loop with no verifier has a large one by construction.
-        "false_success": outcome.exit_reason in ("verified_success", "model_said_done")
-                         and not correct,
+        "false_success": outcome_class(bool(correct), outcome.exit_reason) == "false_success",
+        "outcome": outcome_class(bool(correct), outcome.exit_reason),
     }
 
 
@@ -103,6 +135,10 @@ class CorpusReport:
     n: int
     solve_rate: float
     false_success_rate: float
+    # The third bucket. solve + false success + this = 100. Mostly answerable
+    # tasks where the loop gave up (no_progress, escalate) without claiming
+    # anything, which is the safe way to fail.
+    stopped_unsolved_rate: float
     exit_reasons: dict
     iters_p50: float
     iters_p95: float
@@ -171,6 +207,8 @@ def summarise(label: str, scores: list[dict]) -> CorpusReport:
         n=n,
         solve_rate=_pct(len(solved) / n) if n else 0.0,
         false_success_rate=_pct(sum(s["false_success"] for s in scores) / n) if n else 0.0,
+        stopped_unsolved_rate=_pct(sum(
+            1 for s in scores if not s["correct"] and not s["false_success"]) / n) if n else 0.0,
         exit_reasons=dict(Counter(s["exit_reason"] for s in scores).most_common()),
         iters_p50=_quantile([s["iterations"] for s in solved], 0.50),
         iters_p95=_quantile([s["iterations"] for s in solved], 0.95),
@@ -204,10 +242,15 @@ try:
 
         def score(self, answer_sql=None, gold_sql=None, tier=None,
                   exit_reason=None, **_) -> score_result.ScoreResult:
-            if tier == "blocked":
-                ok = exit_reason == "hard_blocker"
-                reason = ("stopped on the blocker" if ok
-                          else f"kept going, exited as {exit_reason}")
+            if tier in BEHAVIOUR_TIERS:
+                # Same rule as scores_for. This used to accept only
+                # hard_blocker on the blocked tier and fall through to a gold
+                # comparison on the unanswerable tier, where there is no gold
+                # SQL, so it scored every unanswerable run as wrong and
+                # disagreed with the report.
+                ok = behaviour_correct(tier, exit_reason)
+                reason = (f"stopped without claiming success ({exit_reason})" if ok
+                          else f"did not notice, exited as {exit_reason}")
             else:
                 ok = result_set_match(self._conn, answer_sql, gold_sql)
                 reason = "matches gold result set" if ok else "does not match gold"

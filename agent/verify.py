@@ -22,6 +22,7 @@ the answer. Keeping the two ladders separate is the point. See evals/metrics.py.
 
 from __future__ import annotations
 
+import hashlib
 import threading
 from dataclasses import dataclass, field
 from decimal import Decimal
@@ -74,8 +75,6 @@ class Invariants:
     # answer-free
     expected_columns: Optional[int] = None
     row_band: Optional[tuple[int, int]] = None
-    # calibrated
-    value_band: Optional[tuple[int, float, float]] = None  # (col_index, lo, hi)
     reconcile_sql: Optional[str] = None
     # (column_index, control_sql): the sum of that column across every returned
     # row must match the control scalar. This is the strongest invariant in the
@@ -85,6 +84,8 @@ class Invariants:
     reconcile_sum: Optional[tuple] = None
     reconcile_tolerance: float = 0.01
     allow_empty: bool = False
+    # calibrated. The only field that `use_calibrated=False` switches off.
+    value_band: Optional[tuple[int, float, float]] = None  # (col_index, lo, hi)
 
 
 @dataclass
@@ -139,16 +140,28 @@ def parse(sql: str) -> exp.Expression:
 def canonical_hash(sql: str) -> str:
     """Normalised fingerprint, used for no-progress detection.
 
-    Two queries that differ only in whitespace, alias names, or keyword case
-    are the same action. An agent that resubmits one has made no progress no
-    matter how much its reasoning text claims otherwise.
+    Two queries that differ only in whitespace, comments, or keyword and
+    identifier case are the same action. An agent that resubmits one has made
+    no progress no matter how much its reasoning text claims otherwise.
+
+    What this does NOT catch: renamed aliases. `FROM t AS a` and `FROM t AS b`
+    produce different fingerprints, as do `AS revenue` and `AS total`, so an
+    agent that only renames aliases looks like it is making progress. The
+    rung-stall check in gate.py still catches that case, because the renamed
+    query fails at the same rung. Canonicalising aliases would tighten this,
+    but it changes which runs exit `no_progress`, so it needs a full rerun of
+    every arm to keep the results comparable.
+
+    sha256 rather than the builtin `hash()`, which is salted per process: the
+    fingerprint is logged to traces and result files, and a value that changes
+    between processes cannot be compared across runs.
     """
     try:
         tree = sqlglot.parse_one(sql, dialect=DIALECT)
         normalised = tree.sql(dialect=DIALECT, normalize=True, pretty=False, comments=False)
     except ParseError:
         normalised = " ".join(sql.lower().split())
-    return str(hash(normalised))
+    return hashlib.sha256(normalised.encode("utf-8")).hexdigest()[:16]
 
 
 # --------------------------------------------------------------------------
