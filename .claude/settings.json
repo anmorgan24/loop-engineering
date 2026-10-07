@@ -1,0 +1,26 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(make smoke)",
+      "Bash(make audit)",
+      "Bash(make report)",
+      "Bash(make seed)",
+      "Bash(git status)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)"
+    ],
+    "ask": [
+      "Bash(make cost)",
+      "Bash(make pair)",
+      "Bash(make core)",
+      "Bash(make ladder)",
+      "Bash(make clean)",
+      "Bash(python -m evals.run_corpus:*)",
+      "Bash(git push:*)"
+    ],
+    "deny": [
+      "Read(./.env)",
+      "Bash(rm:*out/*)"
+    ]
+  }
+}
