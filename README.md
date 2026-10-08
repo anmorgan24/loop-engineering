@@ -105,8 +105,8 @@ Compare each row to `engineered`, not to the others.
 | removed                   | solved | false success | stopped unsolved |
 | ------------------------- | ------ | ------------- | ---------------- |
 | error classification      | 88%    | 9%            | 3%               |
-| no-progress detection     | TODO   | TODO          | TODO             |
-| blocker detection         | TODO   | TODO          | TODO             |
+| no-progress detection     | 91%    | 9%            | 0%               |
+| blocker detection         | 87%    | 10%           | 3%               |
 | nothing (`engineered`)    | 93%    | 7%            | 0%               |
 
 The false success gap between `no_feedback` and `engineered` is two points,
