@@ -205,7 +205,7 @@ budget_exhausted    iterations, tokens, wall clock or dollars ran out
 no_progress         same query fingerprint twice, or stuck at the same rung
 hard_blocker        nothing the agent can write will work
 escalate            repeated malformed tool calls
-model_said_done     naive loop only, and the reason it is called naive
+model_said_done     naive loop, when the model stops calling tools
 ```
 
 Tagging every trace with one of these is the highest-signal change in the repo.
