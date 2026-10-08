@@ -168,6 +168,7 @@ make cost         # 3 tasks, one arm, to see what spending looks like
 make pair         # naive vs engineered, 3 trials
 make core         # naive, engineered and 5 knockouts, 3 trials each
 make report       # three tables, out/exit_reasons.png, out/ladder.png, out/knockouts.png
+make opik         # score result files in Opik (needs OPIK_API_KEY)
 ```
 
 `make smoke` swaps the model for a scripted stand-in and walks the loop through
@@ -196,6 +197,7 @@ that already exist.
 | `evals/questions.py` | 34 tasks with gold SQL and per-question invariants |
 | `evals/metrics.py` | grading and corpus metrics. Never imported by the loop |
 | `evals/report.py` | the table and the charts |
+| `evals/opik_eval.py` | upload result files to Opik as a scored experiment |
 
 ## Exit reasons
 
@@ -211,6 +213,42 @@ model_said_done     naive loop, when the model stops calling tools
 Tagging every trace with one of these is the highest-signal change in the repo.
 Their distribution across a corpus tells you what kind of loop problem you have
 before you open a single trace.
+
+## Error classification
+
+The loop classifies every failure by one question: can the next action differ in
+a way that could succeed?
+
+**TRANSIENT** -- yes, and the same action will do. Rate limits, timeouts, server
+overload. The loop retries without charging an iteration or progress. A separate
+transient budget caps retries so a provider outage does not stall a run
+indefinitely.
+
+**MALFORMED** -- yes, and the fix is cheap. Unknown tool name, JSON that does not
+parse, DML where a SELECT is required. The loop charges tokens but not progress,
+because a malformed action does not advance understanding.
+
+**SEMANTIC** -- yes, but the query was wrong. Hallucinated column, wrong join,
+cancelled orders included where the question asked for completed only. The loop
+charges progress and feeds back a description of the specific problem: the column
+that does not exist, the rung where the query failed, the band the result fell
+outside.
+
+**HARD_BLOCKER** -- no. Permission denied, credentials rejected, table does not
+exist in the schema. No rewrite will succeed. The loop exits immediately.
+
+The expensive misclassification is the last one read as one of the first three.
+A loop that retries a denied table as if it were a semantic failure burns
+iterations, charges progress, and exits `no_progress`. The exit reason then says
+the agent was confused rather than that the permission was wrong. The gap between
+the `no_blocker_check` arm (87% solved) and `engineered` (93% solved) is what
+that costs across 34 tasks.
+
+Feedback quality matters too. "Error: query failed" is not the same as naming
+the column that does not exist and listing the ones that do. The gap between
+`no_error_classification` and `engineered` is two points on false success, which
+three trials cannot separate from noise. What that gap costs on a harder suite is
+an open question.
 
 ## Two kinds of invariant
 
@@ -229,9 +267,31 @@ derive them from the answer key of the suite you are about to score.
 
 The `answer_free` arm drops the calibrated set, which is why it appears on the
 verification ladder above. The gap between 88% and 93% is what those bands are
-worth, and
-reporting it is the honest version of a verification claim. `make report` prints
-which questions still lean on one.
+worth, and reporting it is the honest version of a verification claim.
+`make report` prints which questions still lean on one.
+
+Writing invariants for a new question follows a short checklist.
+
+**How many columns?** The question usually says: "return two columns" or "a
+single number". Set `expected_columns`.
+
+**How many rows?** "Top five" or "list every region" pins the row count if you
+know the schema. "A single number" is always `(1, 1)`. Set `row_band`.
+
+**Can you reach the same answer via a different path?** Write a second query
+that computes the same result independently and set it as `reconcile_sql`. The
+two queries do not need to be elegant. They need to be written without looking
+at each other, so they can only agree if both are right.
+
+**Should the rows sum to a known total?** If the question produces a breakdown,
+the parts should add to the whole. Set `reconcile_sum`. This is the only
+invariant that catches a silently dropped group: when an inner join removes a
+row, the parts no longer sum to the whole, and the check fires. `reconcile_sql`
+does not catch this because it sees only the first cell of the result.
+
+**Do you have a magnitude range from production history?** Set `value_band` and
+label it calibrated. Do not derive it from the answer key of the suite you are
+about to score.
 
 ## Why agent/ never imports evals/
 
@@ -300,3 +360,11 @@ tasks, so correctly refusing an unanswerable question counts as solved.
   answer. The ladder passed a query that answered a question with no answer.
 - The invariants are the interesting part of this repo and every one of them is
   hand written. That is the work, and there is no way around it.
+- Verification in this repo is deterministic because SQL answers can be run
+  again and compared. For tasks where you cannot run the answer, rung 5 is
+  harder to write and answer-free invariants are harder to find. The rung
+  concept transfers; the specific invariant types here may not.
+- The loop does not manage context growth. Tool call history accumulates with
+  each iteration. For the 12-iteration budget and 34 short tasks this does not
+  matter. For longer tasks or a larger budget, deciding what to keep in context
+  is a real implementation decision this repo does not address.

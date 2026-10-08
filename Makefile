@@ -1,4 +1,4 @@
-.PHONY: help seed audit smoke cost core ladder pair report clean
+.PHONY: help seed audit smoke cost core ladder pair report opik clean
 
 .DEFAULT_GOAL := help
 
@@ -28,6 +28,9 @@ pair:     ## just naive vs engineered, 3 trials
 
 report:   ## tables + out/exit_reasons.png + out/ladder.png + out/knockouts.png
 	python -m evals.report
+
+opik:     ## score result files in Opik (needs OPIK_API_KEY and OPIK_WORKSPACE)
+	python -m evals.opik_eval
 
 clean:
 	rm -f out/*.json out/*.png data/*.duckdb
