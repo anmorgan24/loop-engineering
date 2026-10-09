@@ -4,6 +4,7 @@
       "Bash(make smoke)",
       "Bash(make audit)",
       "Bash(make report)",
+      "Bash(make routes)",
       "Bash(make seed)",
       "Bash(git status)",
       "Bash(git diff:*)",

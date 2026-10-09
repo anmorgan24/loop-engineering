@@ -188,6 +188,34 @@ def unit_checks() -> int:
 
     from agent.verify import canonical_hash
     from evals.metrics import behaviour_correct, outcome_class
+    from outer.route import Route
+    from outer.route import route as outer_route
+    from outer.dispatch import Task, dispatch
+
+    def _raises(fn, exc_type) -> bool:
+        try:
+            fn()
+            return False
+        except exc_type:
+            return True
+        except Exception:
+            return False
+
+    def _dispatcher_no_progress_check() -> bool:
+        """Dispatcher retries once on no_progress and reaches HUMAN_REVIEW.
+
+        REVENUE_BAND causes REVENUE_LISTPRICE to fail rung 5, so the model
+        keeps repeating the same failing query until no_progress fires.
+        """
+        conn = connect()
+        llm.propose_action = scripted(("submit_answer", {"sql": REVENUE_LISTPRICE}))
+        records = dispatch(
+            [Task("smoke_np", "test question", invariants=REVENUE_BAND)],
+            conn=conn,
+            config=None,  # uses ENGINEERED, which detects no_progress
+        )
+        r = records[0]
+        return len(r.outcomes) == 2 and r.final_route is Route.HUMAN_REVIEW
 
     a = "select o.order_id from orders o"
     checks = [
@@ -207,6 +235,17 @@ def unit_checks() -> int:
          outcome_class(False, "no_progress") == "stopped_unsolved"),
         ("outcome buckets: wrong and claimed is false success",
          outcome_class(False, "verified_success") == "false_success"),
+        ("route returns Route for all known exit reasons",
+         all(isinstance(outer_route(r, 1), Route)
+             for r in ["verified_success", "model_said_done", "hard_blocker",
+                       "no_progress", "budget_exhausted", "escalate"])),
+        ("route raises ValueError on unknown exit reason",
+         _raises(lambda: outer_route("alien_exit", 1), ValueError)),
+        ("no_progress: RETRY on attempt 1, HUMAN_REVIEW on attempt 2",
+         outer_route("no_progress", 1) is Route.RETRY
+         and outer_route("no_progress", 2) is Route.HUMAN_REVIEW),
+        ("dispatcher retries once on no_progress and reaches HUMAN_REVIEW",
+         _dispatcher_no_progress_check()),
     ]
     failures = 0
     print("  units")
@@ -216,7 +255,7 @@ def unit_checks() -> int:
     return failures
 
 
-N_UNIT_CHECKS = 7
+N_UNIT_CHECKS = 11
 
 
 def main() -> int:

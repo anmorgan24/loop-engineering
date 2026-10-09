@@ -29,7 +29,7 @@ from collections import defaultdict
 
 from agent.config import KNOCKOUT_ARMS, VERIFICATION_ARMS
 from evals.metrics import (BEHAVIOUR_TIERS, behaviour_correct,
-                           outcome_class, summarise)
+                           outcome_class, regrade, summarise)
 
 OUT = pathlib.Path(__file__).resolve().parent.parent / "out"
 
@@ -71,17 +71,7 @@ def load_all() -> dict:
 
 
 def _regrade(s: dict) -> dict:
-    """Re-apply the current grading rule to the behaviour tiers.
-
-    Those tiers are graded from the exit reason alone, which is stored, so a
-    change to the rule can be applied to old result files without a rerun.
-    Keeps files written before and after a rule change comparable.
-    """
-    if s.get("tier") in BEHAVIOUR_TIERS:
-        s = dict(s)
-        s["correct"] = behaviour_correct(s["tier"], s["exit_reason"])
-        s["false_success"] = outcome_class(s["correct"], s["exit_reason"]) == "false_success"
-    return s
+    return regrade(s)
 
 
 def spread(vals: list[float], dp: int = 1) -> str:

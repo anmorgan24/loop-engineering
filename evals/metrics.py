@@ -226,6 +226,20 @@ def summarise(label: str, scores: list[dict]) -> CorpusReport:
     )
 
 
+def regrade(s: dict) -> dict:
+    """Re-apply the current grading rule to the behaviour tiers.
+
+    Exit reason is stored in the result file, so this can be applied to old
+    files without a rerun whenever the grading rule changes. Shared by
+    report.load_all and replay_routes so the two cannot drift apart.
+    """
+    if s.get("tier") in BEHAVIOUR_TIERS:
+        s = dict(s)
+        s["correct"] = behaviour_correct(s["tier"], s["exit_reason"])
+        s["false_success"] = outcome_class(s["correct"], s["exit_reason"]) == "false_success"
+    return s
+
+
 # --------------------------------------------------------------------------
 # an Opik metric, for the experiment view
 # --------------------------------------------------------------------------

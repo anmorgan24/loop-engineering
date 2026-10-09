@@ -13,15 +13,17 @@ README.md get quoted publicly, so measurement correctness beats speed.
 
 ## Commands
 
-- `make smoke`: scripted model, every exit reason, ablation flags, unit checks. Run after any change to agent/ or evals/.
+- `make smoke`: scripted model, every exit reason, ablation flags, unit checks. Run after any change to agent/ or evals/ or outer/.
 - `make audit`: checks questions for LIMIT ties, unpinned output shapes, weak invariants. Run after any edit to evals/questions.py.
 - `make report`: three tables plus out/exit_reasons.png, out/ladder.png, out/knockouts.png.
+- `make routes`: outer loop routing replay over existing results, writes out/routes.png. No model calls.
 - `make cost`, `make pair`, `make core`: real model calls that cost money. Never run these yourself. Tell me the command and I will run it.
 
 ## Architecture rules
 
 - `should_continue` in agent/gate.py is the only thing that ends the engineered loop. Nothing else in loop.py returns. This is what makes `exit_reason` trustworthy.
 - `agent/` never imports `evals/`. Rungs 1 to 5 (agent/verify.py) gate the loop. Rung 6 and any LLM judge (evals/metrics.py) measure offline and decide nothing.
+- `outer/` may import `agent/`. `agent/` and `evals/` must never import `outer/`. `outer/` must never import `evals/`.
 - `llm.propose_action` is the only non-deterministic step. smoke.py swaps it out; keep that seam clean.
 - `OPIK_PROJECT_NAME` is set in agent/llm.py immediately before `import opik`, because the SDK reads it once at import.
 
