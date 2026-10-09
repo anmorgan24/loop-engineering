@@ -1,8 +1,8 @@
 # loop-engineering
 
-A text-to-SQL agent, built twice. One version is written the way most agent
+I built a text-to-SQL agent twice. One version is written the way most agent
 loops are written. The other has an engineered loop. Same model, same tools,
-same prompt, same schema, so any difference between them comes from the loop.
+same prompt, same schema.
 
 Companion code for a talk of the same name, given at WeAreDevelopers World
 Congress North America in September 2026.
